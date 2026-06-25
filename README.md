@@ -1,3 +1,8 @@
+# so submodules are weird so you must clone https://github.com/SoggySupernova/muse_framework in the muse directory inside this
+
+
+
+
 # ![MuseScore Studio](share/icons/musescore_logo_full.png)
 
 Music notation and composition software
