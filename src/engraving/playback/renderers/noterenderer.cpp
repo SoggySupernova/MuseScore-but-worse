@@ -36,6 +36,8 @@
 
 #include "playback/utils/repeatutils.h"
 
+#include "engraving/playback/humanizer.h"
+
 using namespace mu::engraving;
 using namespace muse;
 using namespace muse::mpe;
@@ -124,6 +126,9 @@ void NoteRenderer::render(const Note* note, const RenderingContext& ctx, mpe::Pl
     }
 
     NominalNoteCtx noteCtx = buildNominalNoteCtx(note, ctx);
+
+
+
     if (!shouldRender(note, ctx, noteCtx.articulations)) {
         return;
     }
