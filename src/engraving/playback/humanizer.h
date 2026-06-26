@@ -11,11 +11,11 @@ class Humanizer {
 public:
     struct Settings {
         // All values are max deviation as a fraction (0.0 - 1.0)
-        double timingAmount    = 0.4;  // ±2% of note duration
+        double timingAmount    = 0.04;  // ±2% of note duration
         double durationAmount  = 0.05;  // ±5% of note duration
         double dynamicAmount   = 0.02;  // ±2% of dynamic level
-        int    tuningAmount    = 50;     // ±2 cents (anything more sounds HORRIBLE)
-        bool   enabled         = true;
+        int    tuningAmount    = 4;     // ±2 cents (anything more sounds HORRIBLE)
+        bool   enabled         = false;
     };
 
     static Humanizer& instance() {
