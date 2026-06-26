@@ -3,7 +3,6 @@
 #include <random>
 #include <cmath>
 #include "mpe/events.h"
-#include "global/thirdparty/picojson/picojson.h"
 #include <fstream>
 
 namespace humanizer {
@@ -26,33 +25,6 @@ public:
 
     Settings settings;
 
-    void loadConfig(const std::string& path) {
-        std::ifstream f(path);
-        if (!f.is_open()) return; // silently use defaults if no config file
-        
-        std::string err;
-        picojson::value v;
-        picojson::parse(v, f);
-        
-        if (!v.is<picojson::object>()) return;
-        auto& root = v.get<picojson::object>();
-        if (root.find("humanizer") == root.end()) return;
-        
-        auto& h = root["humanizer"].get<picojson::object>();
-        
-        if (h.count("enabled"))       settings.enabled       = h["enabled"].get<bool>();
-        if (h.count("timingAmount"))  settings.timingAmount  = h["timingAmount"].get<double>();
-        if (h.count("durationAmount")) settings.durationAmount = h["durationAmount"].get<double>();
-        if (h.count("dynamicAmount")) settings.dynamicAmount = h["dynamicAmount"].get<double>();
-        if (h.count("tuningAmount"))  settings.tuningAmount  = (int)h["tuningAmount"].get<double>();
-        
-        if (h.count("slurCancelInstruments")) {
-            m_slurCancelInstruments.clear();
-            for (auto& item : h["slurCancelInstruments"].get<picojson::array>()) {
-                m_slurCancelInstruments.insert(item.get<std::string>());
-            }
-        }
-    }
 
     bool shouldCancelSlur(const std::string& instrumentId) const {
         return m_slurCancelInstruments.count(instrumentId) > 0;
