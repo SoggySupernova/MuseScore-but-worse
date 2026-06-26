@@ -54,6 +54,7 @@ vtest/Thumbnails
 vtest/Pictures
 .vs
 dependencies
+muse/
 
 # Downloaded files during build process
 VERSION
