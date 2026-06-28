@@ -3,6 +3,7 @@
 #include <random>
 #include <cmath>
 #include "mpe/events.h"
+#include "global/types/ratio.h"
 #include <fstream>
 
 namespace humanizer {
@@ -16,6 +17,8 @@ public:
         double dynamicAmount   = 0.02;  // ±2% of dynamic level
         int    tuningAmount    = 4;     // ±2 cents (anything more sounds HORRIBLE)
         bool   enabled         = false;
+        db_t globalGainReductionDb = 10.0;
+        float globalPanMultiplier = 3.0;
     };
 
     static Humanizer& instance() {

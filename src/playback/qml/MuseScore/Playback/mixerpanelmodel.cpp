@@ -29,6 +29,7 @@
 #include "log.h"
 #include "modularity/ioc.h"
 #include "translation.h"
+#include "engraving/playback/humanizer.h"
 
 using namespace muse;
 using namespace mu::playback;
@@ -454,10 +455,12 @@ MixerChannelItem* MixerPanelModel::buildInstrumentChannelItem(const TrackId trac
                << ", " << text;
     });
 
-    connect(item, &MixerChannelItem::inputParamsChanged, this, [this, trackId](const AudioInputParams& params) {
-        playback()->setSourceParams(trackId, params);
+    connect(item, &MixerChannelItem::controlParamsChanged, this, [this, trackId](const AudioOutputParams& params) {
+        ControlParams control = params.control();
+        control.volume = control.volume - 6.0f;
+        // control.balance = 1.0f; //control.balance * 0.5f; // hardcode 1 to test // doesnt work lol
+        playback()->setControlParams(trackId, control);
     });
-
     connect(item, &MixerChannelItem::controlParamsChanged, this, [this, trackId](const AudioOutputParams& params) {
         playback()->setControlParams(trackId, params.control());
     });
