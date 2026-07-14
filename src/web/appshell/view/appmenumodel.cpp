@@ -123,17 +123,17 @@ muse::uicomponents::MenuItem* AppMenuModel::makeFileMenu()
 MenuItem* AppMenuModel::makeEditMenu()
 {
     MenuItemList editItems {
-        makeMenuItem("action://notation/undo"),
-        makeMenuItem("action://notation/redo"),
+        makeMenuItem("command://notation/undo"),
+        makeMenuItem("command://notation/redo"),
         makeMenuItem(TOGGLE_UNDO_HISTORY_PANEL_CODE),
         makeSeparator(),
-        makeMenuItem("action://notation/cut"),
-        makeMenuItem("action://notation/copy"),
-        makeMenuItem("action://notation/paste"),
+        makeMenuItem("command://notation/cut"),
+        makeMenuItem("command://notation/copy"),
+        makeMenuItem("command://notation/paste"),
         makeMenuItem("notation-paste-half"),
         makeMenuItem("notation-paste-double"),
         makeMenuItem("notation-swap"),
-        makeMenuItem("action://notation/delete"),
+        makeMenuItem("command://notation/delete"),
         makeSeparator(),
         makeMenuItem("notation-select-all"),
         makeMenuItem("notation-select-section"),
@@ -153,13 +153,13 @@ void AppMenuModel::updateUndoRedoItems()
 {
     auto stack = undoStack();
 
-    MenuItem& undoItem = findItem(ActionCode("action://notation/undo"));
+    MenuItem& undoItem = findItem(ActionCode("command://notation/undo"));
     const TranslatableString undoActionName = stack ? stack->topMostUndoActionName() : TranslatableString();
     undoItem.setTitle(undoActionName.isEmpty()
                       ? TranslatableString("action", "Undo")
                       : TranslatableString("action", "Undo ‘%1’").arg(undoActionName));
 
-    MenuItem& redoItem = findItem(ActionCode("action://notation/redo"));
+    MenuItem& redoItem = findItem(ActionCode("command://notation/redo"));
     const TranslatableString redoActionName = stack ? stack->topMostRedoActionName() : TranslatableString();
     redoItem.setTitle(redoActionName.isEmpty()
                       ? TranslatableString("action", "Redo")
@@ -294,7 +294,7 @@ MenuItem* AppMenuModel::makeDiagnosticsMenu()
 MenuItemList AppMenuModel::makeNotesItems()
 {
     MenuItemList items {
-        makeMenuItem("note-input"),
+        makeMenuItem("command://notation/toggle-note-input"),
         makeSeparator(),
         makeMenuItem("note-c"),
         makeMenuItem("note-d"),
@@ -421,7 +421,7 @@ MenuItemList AppMenuModel::makeTextItems()
 MenuItemList AppMenuModel::makeLinesItems()
 {
     MenuItemList items {
-        makeMenuItem("add-slur"),
+        makeMenuItem("command://notation/add-slur"),
         makeMenuItem("add-hairpin"),
         makeMenuItem("add-hairpin-reverse"),
         makeMenuItem("add-8va"),

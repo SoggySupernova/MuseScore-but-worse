@@ -52,17 +52,12 @@ public:
     bool actionChecked(const muse::ui::UiAction& act) const override;
     muse::async::Channel<muse::actions::ActionCodeList> actionCheckedChanged() const override;
 
-    static DurationType actionDurationType(const muse::actions::ActionCode& actionCode);
-    static AccidentalType actionAccidentalType(const muse::actions::ActionCode& actionCode);
-    static int actionDotCount(const muse::actions::ActionCode& actionCode);
     static int actionVoice(const muse::actions::ActionCode& actionCode);
-    static SymbolId actionArticulationSymbolId(const muse::actions::ActionCode& actionCode);
 
     static const muse::ui::ToolConfig& defaultNoteInputBarConfig();
 
 private:
     static const muse::ui::UiActionList s_actions;
-    static const muse::ui::UiActionList s_undoRedoActions;
     static const muse::ui::UiActionList s_scoreConfigActions;
     static const muse::ui::UiActionList s_engravingDebuggingActions;
 

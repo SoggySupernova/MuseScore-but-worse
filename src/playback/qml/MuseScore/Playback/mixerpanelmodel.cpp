@@ -23,13 +23,13 @@
 #include "mixerpanelmodel.h"
 
 #include "async/notifylist.h"
-
 #include "defer.h"
-
 #include "log.h"
-#include "modularity/ioc.h"
 #include "translation.h"
 #include "engraving/playback/humanizer.h"
+
+#include "notation/inotationparts.h"
+#include "notation/inotationplayback.h"
 
 using namespace muse;
 using namespace mu::playback;

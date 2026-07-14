@@ -418,6 +418,9 @@ void TLayout::layoutItem(EngravingItem* item, LayoutContext& ctx)
     case ElementType::STAFF_TEXT:
         layoutStaffText(item_cast<const StaffText*>(item), static_cast<StaffText::LayoutData*>(ldata));
         break;
+    case ElementType::STAVE_SHARING_LABEL:
+        layoutStaveSharingLabel(item_cast<const StaveSharingLabel*>(item), static_cast<StaffText::LayoutData*>(ldata));
+        break;
     case ElementType::STAFFTYPE_CHANGE:
         layoutStaffTypeChange(item_cast<const StaffTypeChange*>(item), static_cast<StaffTypeChange::LayoutData*>(ldata), ctx.conf());
         break;
@@ -867,6 +870,42 @@ void TLayout::layoutArpeggio(const Arpeggio* item, Arpeggio::LayoutData* ldata, 
     }
 }
 
+static Shape getChordsShape(const ChordBracket* item)
+{
+    Chord* owner = item->chord();
+    Shape result = owner->shape();
+    result.removeTypes({ ElementType::CHORD_BRACKET, ElementType::ARPEGGIO });
+    if (!owner->segment() || !owner->staff()) {
+        return result;
+    }
+
+    const track_idx_t startTrack = staff2track(owner->staffIdx());
+    const track_idx_t endTrack = startTrack + VOICES;
+
+    for (track_idx_t track = startTrack; track < endTrack; ++track) {
+        EngravingItem* e = owner->segment()->element(track);
+        if (track == owner->track()) {
+            continue;
+        }
+
+        if (!e || !e->isChord()) {
+            continue;
+        }
+
+        Chord* chord = toChord(e);
+        if (chord->vStaffIdx() != owner->vStaffIdx()) {
+            continue;
+        }
+
+        Shape chordShape = chord->shape();
+        chordShape.removeTypes({ ElementType::CHORD_BRACKET, ElementType::ARPEGGIO });
+        chordShape.translate(chord->pos() - owner->pos());
+        result.add(chordShape);
+    }
+
+    return result;
+}
+
 void TLayout::layoutChordBracket(const ChordBracket* item, Arpeggio::LayoutData* ldata, const LayoutConfiguration& conf)
 {
     double spatium = item->spatium();
@@ -893,8 +932,7 @@ void TLayout::layoutChordBracket(const ChordBracket* item, Arpeggio::LayoutData*
     const Note* upnote = item->chord()->upNote();
     ldata->setPosY(upnote->y() + upnote->ldata()->bbox().top());
 
-    Shape chordShape = item->chord()->shape();
-    chordShape.removeTypes({ ElementType::CHORD_BRACKET, ElementType::ARPEGGIO });
+    Shape chordShape = getChordsShape(item);
     Shape itemShape = item->shape().translated(PointF(0.0, item->ldata()->pos().y()));
     if (item->rightSide()) {
         double x = HorizontalSpacing::minHorizontalDistance(chordShape, itemShape, spatium);
@@ -1991,7 +2029,7 @@ void TLayout::layoutFermata(const Fermata* item, Fermata::LayoutData* ldata)
             const Rest* rest = toRest(e);
             x = rest->x() + rest->centerX();
         } else {
-            x = e->x() - e->shape().left() + e->width() * item->staff()->staffMag(Fraction(0, 1)) * .5;
+            x = e->x() + e->shape().left() + e->width() * item->staff()->staffMag(Fraction(0, 1)) * .5;
         }
     }
 
@@ -2439,8 +2477,8 @@ void TLayout::layoutFingering(const Fingering* item, Fingering::LayoutData* ldat
         } else if (item->textStyleType() == TextStyleType::LH_GUITAR_FINGERING) {
             // place to left of note
             double left = note->shape().left();
-            if (left - note->x() > 0.0) {
-                ldata->moveX(-left);
+            if (left + note->x() < 0.0) {
+                ldata->moveX(left);
             } else {
                 ldata->moveX(-note->x());
             }
@@ -5205,6 +5243,13 @@ void TLayout::layoutStaffText(const StaffText* item, StaffText::LayoutData* ldat
     if (SoundFlag* flag = item->soundFlag()) {
         layoutSoundFlag(flag, flag->mutldata());
     }
+}
+
+void TLayout::layoutStaveSharingLabel(const StaveSharingLabel* item, TextBase::LayoutData* ldata)
+{
+    LAYOUT_CALL_ITEM(item);
+    TextLayout::layoutBaseTextBase(item, ldata);
+    Autoplace::autoplaceSegmentElement(item, ldata);
 }
 
 void TLayout::layoutStaffTypeChange(const StaffTypeChange* item, StaffTypeChange::LayoutData* ldata, const LayoutConfiguration& conf)

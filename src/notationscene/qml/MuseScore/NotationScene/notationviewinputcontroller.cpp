@@ -39,6 +39,13 @@
 #include "engraving/dom/fret.h"
 #include "engraving/dom/shadownote.h"
 
+#include "notation/inotationelements.h" // IWYU pragma: keep
+#include "notation/inotationnoteinput.h"
+#include "notation/inotationpainting.h" // IWYU pragma: keep
+#include "notation/inotationselection.h"
+#include "notation/inotationstyle.h"
+#include "notation/inotationviewstate.h" // IWYU pragma: keep
+
 using namespace mu;
 using namespace mu::notation;
 using namespace mu::engraving;
@@ -1367,7 +1374,7 @@ void NotationViewInputController::mouseDoubleClickEvent(QMouseEvent* event)
         if (modifiers != Qt::NoModifier) {
             break; // Doesn't support modifiers...
         }
-        dispatcher()->dispatch("note-input", ActionData::make_arg1<PointF>(m_mouseDownInfo.logicalBeginPoint));
+        dispatcher()->dispatch("command://notation/toggle-note-input");
         break;
     }
     case ElementType::NOTE: {

@@ -1,4 +1,5 @@
 # so submodules are weird so you must clone https://github.com/SoggySupernova/muse_framework in the muse directory inside this
+# oh and muse_deps
 # you may get errors about missing libFLAC.so.12 and libFLAC++.so.10, it is stupid but just copy them from your/build/directory/_deps/flac/lib to /usr/lib i guess
 
 

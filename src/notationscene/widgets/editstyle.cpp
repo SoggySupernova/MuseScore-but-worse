@@ -47,6 +47,11 @@
 #include "engraving/types/types.h"
 #include "engraving/types/typesconv.h"
 
+#include "notation/inotationelements.h" // IWYU pragma: keep
+#include "notation/inotationstyle.h" // IWYU pragma: keep
+#include "notation/inotationundostack.h" // IWYU pragma: keep
+#include "notation/inotationviewstate.h" // IWYU pragma: keep
+
 #include "ui/view/widgetstatestore.h"
 #include "ui/view/widgetutils.h"
 
@@ -131,6 +136,7 @@ static const QStringList ALL_TEXT_STYLE_SUBPAGE_CODES {
     "rehearsal-mark",
     "system",
     "staff",
+    "staveSharing",
     "expression",
     "hairpin",
     "lyrics-odd-lines",

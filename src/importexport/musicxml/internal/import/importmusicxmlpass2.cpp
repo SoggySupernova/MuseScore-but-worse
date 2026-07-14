@@ -87,6 +87,8 @@
 #include "engraving/dom/tuplet.h"
 #include "engraving/dom/utils.h"
 #include "engraving/dom/volta.h"
+#include "engraving/editing/editmeasurerepeat.h"
+#include "engraving/editing/transaction/transaction.h"
 #include "engraving/editing/transpose.h"
 #include "engraving/engravingerrors.h"
 
@@ -1885,7 +1887,8 @@ static void cleanupUnterminatedTie(Tie* tie, const Score* score, bool fixForCros
         const Segment* nextSeg = score->tick2leftSegment(unterminatedChord->tick() + unterminatedChord->ticks());
         if (nextSeg) {
             const Part* part = unterminatedTieNote->part();
-            for (track_idx_t track = part->startTrack(); track <= part->endTrack(); ++track) {
+            const TrackRange trackRange = part->trackRange();
+            for (track_idx_t track = trackRange.startTrack; track <= trackRange.endTrack; ++track) {
                 const EngravingItem* el = nextSeg->element(track);
                 if (el && el->isChord()) {
                     Note* matchingNote = toChord(el)->findNote(unterminatedTieNote->pitch());
@@ -2383,7 +2386,8 @@ void MusicXmlParserPass2::part()
             } else if (startChord) {
                 // try other voices in the stave
                 const Part* p = startChord->part();
-                for (track_idx_t track = p->startTrack(); track < p->endTrack() + VOICES; track++) {
+                const TrackRange trackRange = p->trackRange();
+                for (track_idx_t track = trackRange.startTrack; track < trackRange.endTrack + VOICES; track++) {
                     nextEl = nextSeg ? nextSeg->element(track) : nullptr;
                     nextChord = nextEl && nextEl->isChord() ? toChord(nextEl) : nullptr;
                     if (nextChord && nextChord->vStaffIdx() != startChord->vStaffIdx()) {
@@ -3034,7 +3038,8 @@ void MusicXmlParserPass2::setMeasureRepeats(const staff_idx_t scoreRelStaff, Mea
                 || (!(m_measureRepeatNumMeasures[i] % 2) && (m_measureRepeatCount[i] == m_measureRepeatNumMeasures[i] / 2))) {
                 // MeasureRepeat element goes in center measure of group if odd-numbered,
                 // or last measure of first half of group if even-numbered
-                m_score->addMeasureRepeat(measure->tick(), track, m_measureRepeatNumMeasures[i]);
+                Transaction& tx = m_score->transactionManager()->currentOrDummyTransaction();
+                EditMeasureRepeat::addMeasureRepeat(tx, m_score, measure->tick(), track, m_measureRepeatNumMeasures[i]);
             } else {
                 // measures that are part of group but do not contain the element have undisplayed whole rests
                 m_score->addRest(measure->tick(), track, TDuration(DurationType::V_MEASURE), 0);
