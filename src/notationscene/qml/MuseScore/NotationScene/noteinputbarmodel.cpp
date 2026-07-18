@@ -32,6 +32,7 @@
 #include "notation/inotationundostack.h"
 
 #include "internal/notationuiactions.h"
+#include "notationcommands.h"
 
 using namespace mu;
 using namespace mu::notation;
@@ -164,15 +165,15 @@ MenuItemList NoteInputBarModel::makeCrossStaffBeamingItems()
 MenuItemList NoteInputBarModel::makeTupletItems()
 {
     MenuItemList items {
-        makeMenuItem("duplet"),
-        makeMenuItem("triplet"),
-        makeMenuItem("quadruplet"),
-        makeMenuItem("quintuplet"),
-        makeMenuItem("sextuplet"),
-        makeMenuItem("septuplet"),
-        makeMenuItem("octuplet"),
-        makeMenuItem("nonuplet"),
-        makeMenuItem("tuplet-dialog")
+        makeMenuItem(ADD_DUPLET_COMMAND),
+        makeMenuItem(ADD_TRIPLET_COMMAND),
+        makeMenuItem(ADD_QUADRUPLET_COMMAND),
+        makeMenuItem(ADD_QUINTUPLET_COMMAND),
+        makeMenuItem(ADD_SEXTUPLET_COMMAND),
+        makeMenuItem(ADD_SEPTUPLET_COMMAND),
+        makeMenuItem(ADD_OCTUPLET_COMMAND),
+        makeMenuItem(ADD_NONUPLET_COMMAND),
+        makeMenuItem(SHOW_TUPLET_CONFIGURE_COMMAND)
     };
 
     return items;
@@ -196,21 +197,21 @@ MenuItemList NoteInputBarModel::makeAddItems()
 MenuItemList NoteInputBarModel::makeNotesItems()
 {
     MenuItemList items {
-        makeMenuItem("note-c"),
-        makeMenuItem("note-d"),
-        makeMenuItem("note-e"),
-        makeMenuItem("note-f"),
-        makeMenuItem("note-g"),
-        makeMenuItem("note-a"),
-        makeMenuItem("note-b"),
+        makeMenuItem("command://notation/enter-note-c"),
+        makeMenuItem("command://notation/enter-note-d"),
+        makeMenuItem("command://notation/enter-note-e"),
+        makeMenuItem("command://notation/enter-note-f"),
+        makeMenuItem("command://notation/enter-note-g"),
+        makeMenuItem("command://notation/enter-note-a"),
+        makeMenuItem("command://notation/enter-note-b"),
         makeSeparator(),
-        makeMenuItem("chord-c"),
-        makeMenuItem("chord-d"),
-        makeMenuItem("chord-e"),
-        makeMenuItem("chord-f"),
-        makeMenuItem("chord-g"),
-        makeMenuItem("chord-a"),
-        makeMenuItem("chord-b")
+        makeMenuItem("command://notation/add-note-c"),
+        makeMenuItem("command://notation/add-note-d"),
+        makeMenuItem("command://notation/add-note-e"),
+        makeMenuItem("command://notation/add-note-f"),
+        makeMenuItem("command://notation/add-note-g"),
+        makeMenuItem("command://notation/add-note-a"),
+        makeMenuItem("command://notation/add-note-b")
     };
 
     return items;

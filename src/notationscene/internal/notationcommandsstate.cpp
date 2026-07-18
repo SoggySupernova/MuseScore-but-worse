@@ -28,6 +28,7 @@
 using namespace muse;
 using namespace muse::rcommand;
 using namespace mu::notation;
+using namespace mu::engraving;
 
 static const muse::Uri PROJECT_PAGE_URI("musescore://notation");
 
@@ -47,7 +48,15 @@ static const std::vector<Command> HAS_SELECTION_REQUIRED_COMMANDS = {
     COPY_COMMAND,
     DELETE_COMMAND,
     FLIP_COMMAND,
-    FLIP_HORIZONTALLY_COMMAND
+    FLIP_HORIZONTALLY_COMMAND,
+    GOTO_UPNOTE_IN_CHORD_COMMAND,
+    GOTO_DOWNNOTE_IN_CHORD_COMMAND,
+    GOTO_TOPNOTE_IN_CHORD_COMMAND,
+    GOTO_BOTTOMNOTE_IN_CHORD_COMMAND,
+    SELECT_SIMILAR_COMMAND,
+    SELECT_SIMILAR_IN_STAFF_COMMAND,
+    SELECT_SIMILAR_IN_RANGE_COMMAND,
+    SELECT_NOTES_IN_CHORD_COMMAND
 };
 
 static const std::vector<Command> UNDO_REDO_COMMANDS = {
@@ -109,11 +118,11 @@ static const std::vector<Command> ADD_COMMANDS = {
     ADD_LV_COMMAND
 };
 
-static const std::map<Command, SymbolId> ADD_ARTICULATION_COMMANDS = {
-    { ADD_MARCATO_COMMAND, SymbolId::articMarcatoAbove },
-    { ADD_SFORZATO_COMMAND, SymbolId::articAccentAbove },
-    { ADD_TENUTO_COMMAND, SymbolId::articTenutoAbove },
-    { ADD_STACCATO_COMMAND, SymbolId::articStaccatoAbove }
+static const std::map<Command, SymId> ADD_ARTICULATION_COMMANDS = {
+    { ADD_MARCATO_COMMAND, SymId::articMarcatoAbove },
+    { ADD_SFORZATO_COMMAND, SymId::articAccentAbove },
+    { ADD_TENUTO_COMMAND, SymId::articTenutoAbove },
+    { ADD_STACCATO_COMMAND, SymId::articStaccatoAbove }
 };
 
 static const std::map<Command, voice_idx_t> VOICE_COMMANDS = {
@@ -121,6 +130,57 @@ static const std::map<Command, voice_idx_t> VOICE_COMMANDS = {
     { USE_VOICE_2_COMMAND, 1 },
     { USE_VOICE_3_COMMAND, 2 },
     { USE_VOICE_4_COMMAND, 3 }
+};
+
+static const std::vector<Command> NOTE_COMMANDS = {
+    ADD_NOTE_COMMAND,
+    ENTER_NOTE_C_COMMAND,
+    ENTER_NOTE_D_COMMAND,
+    ENTER_NOTE_E_COMMAND,
+    ENTER_NOTE_F_COMMAND,
+    ENTER_NOTE_G_COMMAND,
+    ENTER_NOTE_A_COMMAND,
+    ENTER_NOTE_B_COMMAND,
+    ADD_NOTE_C_COMMAND,
+    ADD_NOTE_D_COMMAND,
+    ADD_NOTE_E_COMMAND,
+    ADD_NOTE_F_COMMAND,
+    ADD_NOTE_G_COMMAND,
+    ADD_NOTE_A_COMMAND,
+    ADD_NOTE_B_COMMAND,
+    INSERT_NOTE_C_COMMAND,
+    INSERT_NOTE_D_COMMAND,
+    INSERT_NOTE_E_COMMAND,
+    INSERT_NOTE_F_COMMAND,
+    INSERT_NOTE_G_COMMAND,
+    INSERT_NOTE_A_COMMAND,
+    INSERT_NOTE_B_COMMAND
+};
+
+static const std::vector<Command> TUPLET_COMMANDS = {
+    SHOW_TUPLET_CONFIGURE_COMMAND,
+    ADD_TUPLET_COMMAND,
+    ADD_DUPLET_COMMAND,
+    ADD_TRIPLET_COMMAND,
+    ADD_QUADRUPLET_COMMAND,
+    ADD_QUINTUPLET_COMMAND,
+    ADD_SEXTUPLET_COMMAND,
+    ADD_SEPTUPLET_COMMAND,
+    ADD_OCTUPLET_COMMAND,
+    ADD_NONUPLET_COMMAND
+};
+
+static const std::map<Command, MoveSelectionType> MOVE_SELECTION_COMMANDS = {
+    { GOTO_FIRST_ELEMENT_COMMAND, MoveSelectionType::EngravingItem },
+    { GOTO_LAST_ELEMENT_COMMAND, MoveSelectionType::EngravingItem },
+    { GOTO_NEXT_ELEMENT_COMMAND, MoveSelectionType::EngravingItem },
+    { GOTO_PREV_ELEMENT_COMMAND, MoveSelectionType::EngravingItem },
+    { GOTO_NEXT_TRACK_COMMAND, MoveSelectionType::Track },
+    { GOTO_PREV_TRACK_COMMAND, MoveSelectionType::Track },
+    { GOTO_NEXT_FRAME_COMMAND, MoveSelectionType::Frame },
+    { GOTO_PREV_FRAME_COMMAND, MoveSelectionType::Frame },
+    { GOTO_NEXT_SYSTEM_COMMAND, MoveSelectionType::System },
+    { GOTO_PREV_SYSTEM_COMMAND, MoveSelectionType::System }
 };
 
 std::string NotationCommandsState::moduleName() const
@@ -148,6 +208,8 @@ void NotationCommandsState::init()
         updateCommandStates(ADD_COMMANDS);
         updateCommandStates({ PAD_REST_COMMAND });
         updateCommandStates(commands(VOICE_COMMANDS));
+        updateCommandStates(TUPLET_COMMANDS);
+        updateCommandStates(commands(MOVE_SELECTION_COMMANDS));
     });
 
     controller()->stackChanged().onNotify(this, [this]() {
@@ -172,6 +234,8 @@ void NotationCommandsState::init()
         updateCommandStates(ADD_COMMANDS);
         updateCommandStates(commands(ADD_ARTICULATION_COMMANDS));
         updateCommandStates(commands(VOICE_COMMANDS));
+        updateCommandStates(NOTE_COMMANDS);
+        updateCommandStates(TUPLET_COMMANDS);
     });
 
     updateCommandStates();
@@ -215,11 +279,19 @@ CommandState NotationCommandsState::doCommandState(const Command& command) const
         return CommandState(controller()->hasSelection(), false);
     }
 
+    if (muse::contains(MOVE_SELECTION_COMMANDS, command)) {
+        return CommandState(controller()->isMoveSelectionAvailable(MOVE_SELECTION_COMMANDS.at(command)), false);
+    }
+
     if (command == UNDO_COMMAND) {
         return CommandState(controller()->canUndo(), false);
     }
     if (command == REDO_COMMAND) {
         return CommandState(controller()->canRedo(), false);
+    }
+
+    if (muse::contains(NOTE_COMMANDS, command)) {
+        return CommandState(controller()->isNoteInputActionAllowed(), false);
     }
 
     if (muse::contains(TEXT_EDITING_COMMANDS, command)) {
@@ -265,6 +337,10 @@ CommandState NotationCommandsState::doCommandState(const Command& command) const
 
     if (muse::contains(VOICE_COMMANDS, command)) {
         return CommandState(true, controller()->currentVoice() == VOICE_COMMANDS.at(command));
+    }
+
+    if (muse::contains(TUPLET_COMMANDS, command)) {
+        return CommandState(controller()->isNoteOrRestSelected(), false);
     }
 
     return CommandState(true, false);

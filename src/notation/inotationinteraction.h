@@ -28,9 +28,19 @@
 
 #include "inotation_fwd.h"
 #include "notationtypes.h"
+#include "types/noteinputtypes.h"
 
 class QKeyEvent;
 class QInputMethodEvent;
+
+namespace mu::engraving {
+class EngravingItem;
+class ShadowNote;
+class Staff;
+
+enum class HDuration : signed char;
+enum class Voicing : signed char;
+}
 
 namespace mu::notation {
 class INotationInteraction
@@ -57,12 +67,12 @@ public:
     // Hit
     virtual EngravingItem* hitElement(const muse::PointF& pos, float width) const = 0;
     virtual std::vector<EngravingItem*> hitElements(const muse::PointF& pos, float width) const = 0;
-    virtual Staff* hitStaff(const muse::PointF& pos) const = 0;
+    virtual engraving::Staff* hitStaff(const muse::PointF& pos) const = 0;
 
     struct HitElementContext
     {
-        notation::EngravingItem* element = nullptr;
-        notation::Staff* staff = nullptr;
+        engraving::EngravingItem* element = nullptr;
+        engraving::Staff* staff = nullptr;
 
         bool operator ==(const HitElementContext& other) const
         {
@@ -74,19 +84,34 @@ public:
     virtual void setHitElementContext(const HitElementContext& context) = 0;
 
     // Select
+    virtual INotationSelectionPtr selection() const = 0;
+    virtual muse::async::Notification selectionChanged() const = 0;
+    virtual void select(const std::vector<EngravingItem*>& elements, SelectType type = SelectType::REPLACE, staff_idx_t staffIndex = 0) = 0;
+    virtual void select(SelectionTarget target) = 0;
+
     virtual void moveChordNoteSelection(MoveDirection d) = 0;
-    virtual void select(const std::vector<EngravingItem*>& elements, SelectType type = SelectType::REPLACE,
-                        engraving::staff_idx_t staffIndex = 0) = 0;
+
     virtual void selectAndStartEditIfNeeded(EngravingItem* element) = 0;
     virtual void selectAll() = 0;
     virtual void selectSection() = 0;
     virtual void selectFirstElement(bool frame = true) = 0;
     virtual void selectLastElement() = 0;
-    virtual INotationSelectionPtr selection() const = 0;
+
     virtual void clearSelection() = 0;
-    virtual muse::async::Notification selectionChanged() const = 0;
+
     virtual void selectTopOrBottomOfChord(MoveDirection d) = 0;
     virtual void findAndSelectChordRest(const Fraction& tick) = 0;
+
+    // Change selection
+    virtual bool moveSelectionAvailable(MoveSelectionType type) const = 0;
+    virtual void moveSelection(MoveDirection d, MoveSelectionType type) = 0;
+
+    virtual void moveLyrics(MoveDirection d) = 0;
+    virtual void expandSelection(ExpandSelectionMode mode) = 0;
+    virtual void addToSelection(MoveDirection d, MoveSelectionType type) = 0;
+    virtual void selectTopStaff() = 0;
+    virtual void selectEmptyTrailingMeasure() = 0;
+    virtual void moveSegmentSelection(MoveDirection d) = 0;
 
     virtual EngravingItem* contextItem() const = 0;
 
@@ -127,17 +152,6 @@ public:
     virtual void undo() = 0;
     virtual void redo() = 0;
     virtual void undoRedoToIndex(size_t idx) = 0;
-
-    // Change selection
-    virtual bool moveSelectionAvailable(MoveSelectionType type) const = 0;
-    virtual void moveSelection(MoveDirection d, MoveSelectionType type) = 0;
-
-    virtual void moveLyrics(MoveDirection d) = 0;
-    virtual void expandSelection(ExpandSelectionMode mode) = 0;
-    virtual void addToSelection(MoveDirection d, MoveSelectionType type) = 0;
-    virtual void selectTopStaff() = 0;
-    virtual void selectEmptyTrailingMeasure() = 0;
-    virtual void moveSegmentSelection(MoveDirection d) = 0;
 
     // Move/nudge elements
     virtual void movePitch(MoveDirection d, PitchMode mode) = 0;
@@ -232,6 +246,11 @@ public:
     virtual void toggleScoreLock() = 0;
     virtual void makeIntoSystem() = 0;
     virtual void applySystemLock() = 0;
+    virtual void moveSystemToPrevPage() = 0;
+    virtual void moveSystemToNextPage() = 0;
+    virtual void togglePageLock() = 0;
+    virtual void makeIntoPage() = 0;
+    virtual void applyPageLock() = 0;
 
     virtual void addRemoveSystemLocks(AddRemoveSystemLockType intervalType, int interval = 0) = 0;
     virtual bool transpose(const TransposeOptions& options) = 0;
@@ -259,7 +278,7 @@ public:
     virtual void explodeSelectedStaff() = 0;
     virtual void implodeSelectedStaff() = 0;
 
-    virtual void realizeSelectedChordSymbols(bool literal, Voicing voicing, HarmonyDurationType durationType) = 0;
+    virtual void realizeSelectedChordSymbols(bool literal, engraving::Voicing voicing, engraving::HDuration durationType) = 0;
     virtual void extendToNextNote() = 0;
     virtual void removeSelectedMeasures() = 0;
     virtual void removeSelectedRange() = 0;
