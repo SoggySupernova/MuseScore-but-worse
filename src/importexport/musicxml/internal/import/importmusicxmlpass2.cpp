@@ -2837,7 +2837,7 @@ void MusicXmlParserPass2::measure(const String& partId, const Fraction time)
             Fraction missingCurr;
             int alt = -10;                          // any number outside range of xml-tag "alter"
             // note: chord and grace note handling done in note()
-            // dura > 0 iff valid rest or first note of chord found
+            // dura > 0 if valid rest or first note of chord found
             Note* n = note(partId, measure, time + mTime, time + prevTime, missingPrev, dura, missingCurr, cv, gcl, gac, beams, fbl, alt,
                            tupletStates, tuplets, arpMap, delayedArps);
             if (n && !n->chord()->isGrace()) {
@@ -5286,7 +5286,7 @@ void MusicXmlParserDirection::octaveShift(const String& type, const int number,
             return;
         }
         int ottavasize = m_e.intAttribute("size");
-        if (!(ottavasize == 8 || ottavasize == 15)) {
+        if (!(ottavasize == 8 || ottavasize == 15 || ottavasize == 22)) {
             m_logger->logError(String(u"unknown octave-shift size %1").arg(ottavasize), &m_e);
         } else {
             Ottava* o = spdesc.isStopped ? toOttava(spdesc.sp) : Factory::createOttava(m_score->dummy());
@@ -5297,6 +5297,8 @@ void MusicXmlParserDirection::octaveShift(const String& type, const int number,
                     o->setOttavaType(OttavaType::OTTAVA_8VA);
                 } else if (ottavasize == 15) {
                     o->setOttavaType(OttavaType::OTTAVA_15MA);
+                } else if (ottavasize == 22) {
+                    o->setOttavaType(OttavaType::OTTAVA_22MA);
                 }
             } else if (type == u"up") {
                 m_placement = m_placement.empty() ? u"below" : m_placement;
@@ -5304,6 +5306,8 @@ void MusicXmlParserDirection::octaveShift(const String& type, const int number,
                     o->setOttavaType(OttavaType::OTTAVA_8VB);
                 } else if (ottavasize == 15) {
                     o->setOttavaType(OttavaType::OTTAVA_15MB);
+                } else if (ottavasize == 22) {
+                    o->setOttavaType(OttavaType::OTTAVA_22MB);
                 }
             }
 
