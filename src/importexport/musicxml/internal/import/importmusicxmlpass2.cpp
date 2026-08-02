@@ -3968,6 +3968,7 @@ Text* MusicXmlParserDirection::addTextToHeader(const TextStyleType textStyleType
 {
     Text* t = Factory::createText(m_score->dummy(), textStyleType);
     t->setXmlText(m_wordsText.trimmed());
+    t->renderer()->layoutText1(t);
     MeasureBase* const firstMeasure = m_score->measures()->first();
     VBox* vbox
         = firstMeasure->isVBox() ? toVBox(firstMeasure) : MusicXmlParserPass1::createAndAddVBoxForCreditWords(m_score, Fraction(0, 1));
@@ -6746,7 +6747,7 @@ static void addTremolo(ChordRest* cr, const int tremoloNr, const String& tremolo
     }
     if (tremoloNr) {
         //LOGD("tremolo %d type '%s' ticks %d tremStart %p", tremoloNr, muPrintable(tremoloType), ticks, _tremStart);
-        if (tremoloNr == 1 || tremoloNr == 2 || tremoloNr == 3 || tremoloNr == 4) {
+        if (tremoloNr >= 1 && tremoloNr <= 6) {
             if (tremoloType.empty() || tremoloType == u"single") {
                 TremoloType type = TremoloType::INVALID_TREMOLO;
                 switch (tremoloNr) {
@@ -6757,6 +6758,10 @@ static void addTremolo(ChordRest* cr, const int tremoloNr, const String& tremolo
                 case 3: type = TremoloType::R32;
                     break;
                 case 4: type = TremoloType::R64;
+                    break;
+                case 5: type = TremoloType::R128;
+                    break;
+                case 6: type = TremoloType::R256;
                     break;
                 }
 
@@ -6786,6 +6791,10 @@ static void addTremolo(ChordRest* cr, const int tremoloNr, const String& tremolo
                     case 3: type = TremoloType::C32;
                         break;
                     case 4: type = TremoloType::C64;
+                        break;
+                    case 5: type = TremoloType::C128;
+                        break;
+                    case 6: type = TremoloType::C256;
                         break;
                     }
 
