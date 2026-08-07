@@ -81,6 +81,8 @@ AbstractNotationPaintView::AbstractNotationPaintView(QQuickItem* parent)
 
 AbstractNotationPaintView::~AbstractNotationPaintView()
 {
+    m_inputController->deinit();
+
     if (m_notation && isMainView()) {
         m_notation->accessibility()->setMapToScreenFunc(nullptr);
         m_notation->interaction()->setGetViewRectFunc(nullptr);
@@ -792,6 +794,10 @@ void AbstractNotationPaintView::onNotationSetup()
     });
 
     notationConfiguration()->foregroundChanged().onNotify(this, [this]() {
+        scheduleRedraw();
+    });
+
+    notationConfiguration()->notationColorChanged().onNotify(this, [this]() {
         scheduleRedraw();
     });
 

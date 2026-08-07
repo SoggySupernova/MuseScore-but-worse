@@ -29,6 +29,7 @@
 #include "engraving/playback/humanizer.h"
 
 #include "notation/imasternotation.h"
+#include "notation/inotationautomation.h"
 #include "notation/inotationparts.h"
 #include "notation/inotationplayback.h"
 
@@ -325,6 +326,50 @@ void MixerPanelModel::setupConnections()
             addItem(buildAuxChannelItem(index, trackId), masterChannelIndex() - visibleAuxesOnRight);
         } else {
             removeItem(trackId);
+        }
+    });
+
+    subscribeOnAutomationChanges();
+}
+
+void MixerPanelModel::subscribeOnAutomationChanges()
+{
+    if (!currentProject()) {
+        return;
+    }
+
+    AutomationDataConstPtr automation = currentProject()->masterNotation()->automation()->automationData();
+    if (!automation) {
+        return;
+    }
+
+    automation->changed().onReceive(this, [this](const AutomationChanges& changes) {
+        if (changes.isFullReset) {
+            for (MixerChannelItem* item : m_mixerChannelList) {
+                item->updateHasAutomationFlags();
+            }
+            return;
+        }
+
+        InstrumentTrackIdSet affectedTrackIds;
+        for (const AutomationCurveKey& key : changes.affectedKeys) {
+            if (key.type != AutomationType::Volume && key.type != AutomationType::Pan) {
+                continue;
+            }
+
+            if (const std::optional<InstrumentTrackId> trackId = key.trackId()) {
+                affectedTrackIds.insert(*trackId);
+            }
+        }
+
+        if (affectedTrackIds.empty()) {
+            return;
+        }
+
+        for (MixerChannelItem* item : m_mixerChannelList) {
+            if (muse::contains(affectedTrackIds, item->instrumentTrackId())) {
+                item->updateHasAutomationFlags();
+            }
         }
     });
 }

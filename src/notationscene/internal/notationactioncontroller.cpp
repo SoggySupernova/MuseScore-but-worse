@@ -22,10 +22,11 @@
 
 #include "notationactioncontroller.h"
 
-#include <QGuiApplication>
-
 #include "global/io/file.h"
 #include "global/translation.h"
+#include "global/types/ret.h"
+
+#include "rcommand/actiontocommand.h"
 
 #include "engraving/dom/harmony.h"
 #include "engraving/dom/masterscore.h"
@@ -45,24 +46,20 @@
 #include "notation/inotationselection.h"
 #include "notation/inotationstyle.h"
 #include "notation/inotationundostack.h"
-#include "notation/notationtypes.h"
 #include "notation/inotationinteraction.h"
 
 #include "project/inotationproject.h"
 
 #include "qml/MuseScore/NotationScene/abstractelementpopupmodel.h"
+#include "qml/MuseScore/NotationScene/notationviewinputcontroller.h"
 
 #include "../notationcommands.h"
 
 #include "log.h"
-#include "rcommand/commandtypes.h"
-#include "thirdparty/kors_logger/src/log_base.h"
-#include "types/ret.h"
 
 using namespace mu;
 using namespace muse;
 using namespace muse::io;
-using namespace muse::ui;
 using namespace mu::notation;
 using namespace muse::actions;
 using namespace mu::context;
@@ -91,11 +88,23 @@ const std::unordered_map<ActionCode, bool EngravingDebuggingOptions::*> Notation
 //! NOTE Just for more readable
 using Controller = NotationActionController;
 using Interaction = INotationInteraction;
+using ViewController = INotationViewController;
 
-template<typename T>
-constexpr auto param = [](const ActionData& args, int index) -> Val {
-    return Val(args.arg<T>(index));
-};
+// tuplet options convertor
+static muse::rcommand::CommandQuery tupletOptions(const rcommand::Command& command, const ActionData& args)
+{
+    IF_ASSERT_FAILED(args.count() > 0) {
+        return muse::rcommand::CommandQuery();
+    }
+    TupletOptions options = args.arg<TupletOptions>(0);
+
+    rcommand::CommandQuery query(command);
+    query.addParam("ratio", Val(options.ratio.toString().toStdString()));
+    query.addParam("number-type", Val(engraving::str_conv(options.numberType)));
+    query.addParam("bracket-type", Val(engraving::str_conv(options.bracketType)));
+    query.addParam("auto-baselen", Val(options.autoBaseLen));
+    return query;
+}
 
 void NotationActionController::init()
 {
@@ -107,37 +116,32 @@ void NotationActionController::init()
     registerCommand(REDO_COMMAND, &Interaction::redo);
 
     // navigation and selection commands
-    static const rcommand::CommandQuery SELECT_QUERY(SELECT_COMMAND);
 
-    static const std::map<rcommand::Command, rcommand::CommandQuery> SELECTION_ALIASES {
-        { GOTO_FIRST_ELEMENT_COMMAND, SELECT_QUERY.set("target", "first-item").set("play-mode", "chord") },
-        { GOTO_LAST_ELEMENT_COMMAND, SELECT_QUERY.set("target", "last-item").set("play-mode", "chord") },
-        { GOTO_NEXT_ELEMENT_COMMAND, SELECT_QUERY.set("target", "next-item").set("play-mode", "note") },
-        { GOTO_PREV_ELEMENT_COMMAND, SELECT_QUERY.set("target", "prev-item").set("play-mode", "note") },
-        { GOTO_NEXT_SEGMENT_ELEMENT_COMMAND, SELECT_QUERY.set("target", "next-segment-item").set("play-mode", "note") },
-        { GOTO_PREV_SEGMENT_ELEMENT_COMMAND, SELECT_QUERY.set("target", "prev-segment-item").set("play-mode", "note") },
-        { GOTO_NEXT_TRACK_COMMAND, SELECT_QUERY.set("target", "next-track").set("play-mode", "chord") },
-        { GOTO_PREV_TRACK_COMMAND, SELECT_QUERY.set("target", "prev-track").set("play-mode", "chord") },
-        { GOTO_NEXT_FRAME_COMMAND, SELECT_QUERY.set("target", "next-frame") },
-        { GOTO_PREV_FRAME_COMMAND, SELECT_QUERY.set("target", "prev-frame") },
-        { GOTO_NEXT_SYSTEM_COMMAND, SELECT_QUERY.set("target", "next-system") },
-        { GOTO_PREV_SYSTEM_COMMAND, SELECT_QUERY.set("target", "prev-system") },
-        { GOTO_UPNOTE_IN_CHORD_COMMAND, SELECT_QUERY.set("target", "up-note-in-chord") },
-        { GOTO_DOWNNOTE_IN_CHORD_COMMAND, SELECT_QUERY.set("target", "down-note-in-chord") },
-        { GOTO_TOPNOTE_IN_CHORD_COMMAND, SELECT_QUERY.set("target", "top-note-in-chord") },
-        { GOTO_BOTTOMNOTE_IN_CHORD_COMMAND, SELECT_QUERY.set("target", "bottom-note-in-chord") },
-        { GOTO_TOP_STAFF_COMMAND, SELECT_QUERY.set("target", "top-staff").set("play-mode", "chord") },
-        { GOTO_EMPTY_TRAILING_MEASURE_COMMAND, SELECT_QUERY.set("target", "empty-trailing-measure") },
-        { SELECT_SIMILAR_COMMAND, SELECT_QUERY.set("target", "similar") },
-        { SELECT_SIMILAR_IN_STAFF_COMMAND, SELECT_QUERY.set("target", "similar-in-staff") },
-        { SELECT_SIMILAR_IN_RANGE_COMMAND, SELECT_QUERY.set("target", "similar-in-range") },
-        { SELECT_NOTES_IN_CHORD_COMMAND, SELECT_QUERY.set("target", "notes-in-chord") },
-        { SELECT_ALL_COMMAND, SELECT_QUERY.set("target", "all") },
-        { SELECT_SECTION_COMMAND, SELECT_QUERY.set("target", "section") },
-    };
-
-    registerCommand(SELECT_COMMAND, &Controller::select);
-    registerAliases(SELECTION_ALIASES, &Controller::select);
+    registerQueryCommand(SELECT_COMMAND, &Controller::select);
+    registerCommand(GOTO_FIRST_ELEMENT_COMMAND, [this]() { select(SelectionTarget::FirstItem, PlayMode::PlayChord); });
+    registerCommand(GOTO_LAST_ELEMENT_COMMAND, [this]() { select(SelectionTarget::LastItem, PlayMode::PlayChord); });
+    registerCommand(GOTO_NEXT_ELEMENT_COMMAND, [this]() { select(SelectionTarget::NextItem, PlayMode::PlayNote); });
+    registerCommand(GOTO_PREV_ELEMENT_COMMAND, [this]() { select(SelectionTarget::PrevItem, PlayMode::PlayNote); });
+    registerCommand(GOTO_NEXT_SEGMENT_ELEMENT_COMMAND, [this]() { select(SelectionTarget::NextSegmentItem, PlayMode::PlayNote); });
+    registerCommand(GOTO_PREV_SEGMENT_ELEMENT_COMMAND, [this]() { select(SelectionTarget::PrevSegmentItem, PlayMode::PlayNote); });
+    registerCommand(GOTO_NEXT_TRACK_COMMAND, [this]() { select(SelectionTarget::NextTrack, PlayMode::PlayChord); });
+    registerCommand(GOTO_PREV_TRACK_COMMAND, [this]() { select(SelectionTarget::PrevTrack, PlayMode::PlayChord); });
+    registerCommand(GOTO_NEXT_FRAME_COMMAND, [this]() { select(SelectionTarget::NextFrame); });
+    registerCommand(GOTO_PREV_FRAME_COMMAND, [this]() { select(SelectionTarget::PrevFrame); });
+    registerCommand(GOTO_NEXT_SYSTEM_COMMAND, [this]() { select(SelectionTarget::NextSystem); });
+    registerCommand(GOTO_PREV_SYSTEM_COMMAND, [this]() { select(SelectionTarget::PrevSystem); });
+    registerCommand(GOTO_UPNOTE_IN_CHORD_COMMAND, [this]() { select(SelectionTarget::UpNoteInChord); });
+    registerCommand(GOTO_DOWNNOTE_IN_CHORD_COMMAND, [this]() { select(SelectionTarget::DownNoteInChord); });
+    registerCommand(GOTO_TOPNOTE_IN_CHORD_COMMAND, [this]() { select(SelectionTarget::TopNoteInChord); });
+    registerCommand(GOTO_BOTTOMNOTE_IN_CHORD_COMMAND, [this]() { select(SelectionTarget::BottomNoteInChord); });
+    registerCommand(GOTO_TOP_STAFF_COMMAND, [this]() { select(SelectionTarget::TopStaff, PlayMode::PlayChord); });
+    registerCommand(GOTO_EMPTY_TRAILING_MEASURE_COMMAND, [this]() { select(SelectionTarget::EmptyTrailingMeasure); });
+    registerCommand(SELECT_SIMILAR_COMMAND, [this]() { select(SelectionTarget::Similar); });
+    registerCommand(SELECT_SIMILAR_IN_STAFF_COMMAND, [this]() { select(SelectionTarget::SimilarInStaff); });
+    registerCommand(SELECT_SIMILAR_IN_RANGE_COMMAND, [this]() { select(SelectionTarget::SimilarInRange); });
+    registerCommand(SELECT_NOTES_IN_CHORD_COMMAND, [this]() { select(SelectionTarget::NotesInChord); });
+    registerCommand(SELECT_ALL_COMMAND, [this]() { select(SelectionTarget::All); });
+    registerCommand(SELECT_SECTION_COMMAND, [this]() { select(SelectionTarget::Section); });
 
     registerCommand(GET_LOCATION_COMMAND, &Interaction::getLocation);
 
@@ -161,23 +165,15 @@ void NotationActionController::init()
     registerCommand(EDITTEXT_NEXT_BEAT_COMMAND, &Controller::nextBeatTextElement, &Controller::textNavigationByBeatsAvailable);
     registerCommand(EDITTEXT_PREV_BEAT_COMMAND, &Controller::prevBeatTextElement, &Controller::textNavigationByBeatsAvailable);
 
-    static const std::map<rcommand::Command, Fraction> ADVANCE_DURATIONS = {
-        { EDITTEXT_ADVANCE_LONGA_COMMAND, Fraction(4, 1) },
-        { EDITTEXT_ADVANCE_BREVE_COMMAND, Fraction(2, 1) },
-        { EDITTEXT_ADVANCE_1_COMMAND, Fraction(1, 1) },
-        { EDITTEXT_ADVANCE_2_COMMAND, Fraction(1, 2) },
-        { EDITTEXT_ADVANCE_4_COMMAND, Fraction(1, 4) },
-        { EDITTEXT_ADVANCE_8_COMMAND, Fraction(1, 8) },
-        { EDITTEXT_ADVANCE_16_COMMAND, Fraction(1, 16) },
-        { EDITTEXT_ADVANCE_32_COMMAND, Fraction(1, 32) },
-        { EDITTEXT_ADVANCE_64_COMMAND, Fraction(1, 64) },
-    };
-
-    for (auto it = ADVANCE_DURATIONS.cbegin(); it != ADVANCE_DURATIONS.cend(); ++it) {
-        registerCommand(it->first, [this, it]() {
-            navigateToTextElementByFraction(it->second);
-        }, &Controller::textNavigationByFractionAvailable);
-    }
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_LONGA_COMMAND, Fraction(4, 1));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_BREVE_COMMAND, Fraction(2, 1));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_1_COMMAND, Fraction(1, 1));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_2_COMMAND, Fraction(1, 2));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_4_COMMAND, Fraction(1, 4));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_8_COMMAND, Fraction(1, 8));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_16_COMMAND, Fraction(1, 16));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_32_COMMAND, Fraction(1, 32));
+    registerNavigationByFractionCommand(EDITTEXT_ADVANCE_64_COMMAND, Fraction(1, 64));
 
     // lyrics editing commands
     registerCommand(EDITLYRIC_NEXT_VERSE_COMMAND, &Interaction::navigateToLyricsVerse, MoveDirection::Down);
@@ -269,7 +265,9 @@ void NotationActionController::init()
     registerCommand(FLIP_COMMAND, &Interaction::flipSelection);
     registerCommand(FLIP_HORIZONTALLY_COMMAND, &Interaction::flipSelectionHorizontally);
 
-    registerCommand(ADD_NOTE_COMMAND, &Controller::handleNoteAction);
+    registerQueryCommand(ADD_NOTE_COMMAND, &Controller::addNote);
+    registerQueryCommand(ADD_DRUM_NOTE_COMMAND, &Controller::addDrumNote);
+
     registerNoteCommand(ENTER_NOTE_C_COMMAND, NoteName::C);
     registerNoteCommand(ENTER_NOTE_D_COMMAND, NoteName::D);
     registerNoteCommand(ENTER_NOTE_E_COMMAND, NoteName::E);
@@ -295,7 +293,7 @@ void NotationActionController::init()
     registerCommand(ENTER_REST_COMMAND, &Interaction::putRestToSelection);
 
     registerCommand(OPEN_TUPLET_CONFIGURE_COMMAND, [this]() { openTupletOtherDialog(); });
-    registerCommand(ADD_TUPLET_COMMAND, &Controller::putTuplet);
+    registerQueryCommand(ADD_TUPLET_COMMAND, &Controller::putTuplet);
     registerCommand(ADD_DUPLET_COMMAND, [this]() { putTuplet(2); });
     registerCommand(ADD_TRIPLET_COMMAND, [this]() { putTuplet(3); });
     registerCommand(ADD_QUADRUPLET_COMMAND, [this]() { putTuplet(4); });
@@ -482,20 +480,20 @@ void NotationActionController::init()
     registerCommand(SPLIT_MEASURE_COMMAND, &Interaction::splitSelectedMeasure);
     registerCommand(JOIN_MEASURES_COMMAND, &Interaction::joinSelectedMeasures);
     registerCommand(INSERT_MEASURE_COMMAND, [this]() { addBoxes(BoxType::Measure, 1, AddBoxesTarget::BeforeSelection); });
-    registerCommand(INSERT_MEASURES_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
-        addMeasures(query, AddBoxesTarget::BeforeSelection);
+    registerQueryCommand(INSERT_MEASURES_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
+        return addMeasures(query, AddBoxesTarget::BeforeSelection);
     });
-    registerCommand(INSERT_MEASURES_AFTER_SELECTION_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
-        addMeasures(query, AddBoxesTarget::AfterSelection);
+    registerQueryCommand(INSERT_MEASURES_AFTER_SELECTION_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
+        return addMeasures(query, AddBoxesTarget::AfterSelection);
     });
-    registerCommand(INSERT_MEASURES_AT_START_OF_SCORE_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
-        addMeasures(query, AddBoxesTarget::AtStartOfScore);
+    registerQueryCommand(INSERT_MEASURES_AT_START_OF_SCORE_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
+        return addMeasures(query, AddBoxesTarget::AtStartOfScore);
     });
     registerCommand(APPEND_MEASURE_COMMAND, [this]() {
         addBoxes(BoxType::Measure, 1, AddBoxesTarget::AtEndOfScore);
     });
-    registerCommand(APPEND_MEASURES_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
-        addMeasures(query, AddBoxesTarget::AtEndOfScore);
+    registerQueryCommand(APPEND_MEASURES_COMMAND, [this](const muse::rcommand::CommandQuery& query) {
+        return addMeasures(query, AddBoxesTarget::AtEndOfScore);
     });
 
     registerCommand(STRETCH_DECREASE_COMMAND, [this]() { addStretch(-STRETCH_STEP); });
@@ -518,7 +516,7 @@ void NotationActionController::init()
     // style commands
     registerCommand(LOAD_STYLE_COMMAND, &Controller::loadStyle);
     registerCommand(SAVE_STYLE_COMMAND, &Controller::saveStyle);
-    registerCommand(OPEN_EDIT_STYLE_COMMAND, &Controller::openEditStyleDialog);
+    registerQueryCommand(OPEN_EDIT_STYLE_COMMAND, &Controller::openEditStyleDialog);
     registerCommand(TOGGLE_CONCERT_PITCH_COMMAND, &Controller::toggleConcertPitch);
 
     // reset commands
@@ -555,10 +553,10 @@ void NotationActionController::init()
     registerCommand(ENHARMONIC_SPELL_CURRENT_COMMAND, &Interaction::changeEnharmonicSpelling, false);
 
     // screen commands
-    registerCommand(SCREEN_PUT_NOTE_COMMAND, &Controller::putNote);
-    registerCommand(SCREEN_REMOVE_NOTE_COMMAND, &Controller::removeNote);
-    registerCommand(SCREEN_EDIT_TEXT_COMMAND, &Controller::startEditSelectedText);
-    registerCommand(SCREEN_EDIT_ELEMENT_COMMAND, &Controller::startEditSelectedElement);
+    registerQueryCommand(SCREEN_PUT_NOTE_COMMAND, &Controller::putNote);
+    registerQueryCommand(SCREEN_REMOVE_NOTE_COMMAND, &Controller::removeNote);
+    registerQueryCommand(SCREEN_EDIT_TEXT_COMMAND, &Controller::startEditSelectedText);
+    registerQueryCommand(SCREEN_EDIT_ELEMENT_COMMAND, &Controller::startEditSelectedElement);
 
     // others commands
     registerCommand(REGROUP_RHYTHMS_COMMAND, &Interaction::regroupNotesAndRests);
@@ -581,6 +579,7 @@ void NotationActionController::init()
                     VoiceAssignment::ALL_VOICE_IN_STAFF);
 
     registerCommand(TOGGLE_AUTOMATION_COMMAND, &Controller::toggleAutomation);
+    registerQueryCommand(SELECT_AUTOMATION_TYPE_COMMAND, &Controller::selectAutomationType);
 
     // TAB
     registerCommand(SET_DURATION_WHOLE_TAB_COMMAND, [this]() { setDuration(DurationType::V_WHOLE); });
@@ -627,10 +626,448 @@ void NotationActionController::init()
     registerCommand(GOTO_STRING_ABOVE_COMMAND, [this]() { move(MoveDirection::Up, false); });
     registerCommand(GOTO_STRING_BELOW_COMMAND, [this]() { move(MoveDirection::Down, false); });
 
-    // --------------------
-    registerAction("note-action", &Controller::handleNoteAction); // used for drums
+    // view commands
+    registerViewCommand(ZOOM_IN_COMMAND, &ViewController::zoomIn);
+    registerViewCommand(ZOOM_OUT_COMMAND, &ViewController::zoomOut);
+    registerViewCommand(ZOOM_TO_PAGE_WIDTH_COMMAND, &ViewController::zoomToPageWidth);
+    registerViewCommand(ZOOM_TO_WHOLE_PAGE_COMMAND, &ViewController::zoomToWholePage);
+    registerViewCommand(ZOOM_TO_TWO_PAGES_COMMAND, &ViewController::zoomToTwoPages);
+    registerViewCommand(ZOOM_TO_100_COMMAND, &ViewController::setZoom, 100);
+    registerQueryCommand(ZOOM_TO_PERCENT_COMMAND, &Controller::zoomToPercent);
 
-    // TAB
+    registerViewCommand(VIEW_MODE_PAGE_COMMAND, &ViewController::setViewMode, ViewMode::PAGE);
+    registerViewCommand(VIEW_MODE_FLOAT_COMMAND, &ViewController::setViewMode, ViewMode::FLOAT);
+    registerViewCommand(VIEW_MODE_CONTINUOUS_COMMAND, &ViewController::setViewMode, ViewMode::LINE);
+    registerViewCommand(VIEW_MODE_SINGLE_COMMAND, &ViewController::setViewMode, ViewMode::SYSTEM);
+
+    registerViewCommand(NEXT_SCREEN_COMMAND, &ViewController::nextScreen);
+    registerViewCommand(PREV_SCREEN_COMMAND, &ViewController::previousScreen);
+    registerViewCommand(NEXT_PAGE_COMMAND, &ViewController::nextPage);
+    registerViewCommand(PREV_PAGE_COMMAND, &ViewController::previousPage);
+    registerViewCommand(TOP_OF_FIRST_PAGE_COMMAND, &ViewController::startOfScore);
+    registerViewCommand(BOTTOM_OF_LAST_PAGE_COMMAND, &ViewController::endOfScore);
+
+    registerViewCommand(CONTEXT_MENU_OF_SELECTION_COMMAND, &ViewController::openContextMenuOfSelection);
+
+    // compat
+    {
+        using namespace muse::rcommand;
+        static const std::vector<ActionToCommand> actionToCommand = {
+            { "action://notation/copy", COPY_COMMAND, {} },
+            { "action://notation/cut", CUT_COMMAND, {} },
+            { "action://notation/paste", PASTE_COMMAND, {} },
+            { "notation-paste-half", PASTE_HALF_COMMAND, {} },
+            { "notation-paste-double", PASTE_DOUBLE_COMMAND, {} },
+            { "notation-paste-special", PASTE_SPECIAL_COMMAND, {} },
+            { "notation-swap", COPY_PASTE_SWAP_COMMAND, {} },
+            { "action://notation/delete", DELETE_COMMAND, {} },
+            { "action://notation/cancel", CANCEL_COMMAND, {} },
+            { "action://notation/undo", UNDO_COMMAND, {} },
+            { "action://notation/redo", REDO_COMMAND, {} },
+            { "action://copy", COPY_COMMAND, {} },
+            { "action://cut", CUT_COMMAND, {} },
+            { "action://paste", PASTE_COMMAND, {} },
+            { "action://delete", DELETE_COMMAND, {} },
+            { "action://cancel", CANCEL_COMMAND, {} },
+            { "action://undo", UNDO_COMMAND, {} },
+            { "action://redo", REDO_COMMAND, {} },
+            { "notation-move-right", MOVE_RIGHT_COMMAND, {} },
+            { "notation-move-left", MOVE_LEFT_COMMAND, {} },
+            { "notation-move-right-quickly", MOVE_RIGHT_QUICKLY_COMMAND, {} },
+            { "notation-move-left-quickly", MOVE_LEFT_QUICKLY_COMMAND, {} },
+            { "pitch-up", PITCH_UP_COMMAND, {} },
+            { "pitch-down", PITCH_DOWN_COMMAND, {} },
+            { "pitch-up-octave", PITCH_UP_OCTAVE_COMMAND, {} },
+            { "pitch-down-octave", PITCH_DOWN_OCTAVE_COMMAND, {} },
+            { "pitch-up-diatonic", PITCH_UP_DIATONIC_COMMAND, {} },
+            { "pitch-down-diatonic", PITCH_DOWN_DIATONIC_COMMAND, {} },
+            { "pitch-up-diatonic-alterations", PITCH_UP_DIATONIC_ALTERATIONS_COMMAND, {} },
+            { "pitch-down-diatonic-alterations", PITCH_DOWN_DIATONIC_ALTERATIONS_COMMAND, {} },
+            { "next-word", EDITTEXT_NEXT_WORD_COMMAND, {} },
+            { "next-text-element", EDITTEXT_NEXT_ELEMENT_COMMAND, {} },
+            { "prev-text-element", EDITTEXT_PREV_ELEMENT_COMMAND, {} },
+            { "note-input", TOGGLE_NOTE_INPUT_COMMAND, {} },
+            { "note-input-by-note-name", TOGGLE_NOTE_INPUT_BY_NOTE_NAME_COMMAND, {} },
+            { "note-input-by-duration", TOGGLE_NOTE_INPUT_BY_DURATION_COMMAND, {} },
+            { "note-input-rhythm", TOGGLE_NOTE_INPUT_RHYTHM_COMMAND, {} },
+            { "note-input-repitch", TOGGLE_NOTE_INPUT_REPITCH_COMMAND, {} },
+            { "note-input-realtime-auto", TOGGLE_NOTE_INPUT_REALTIME_AUTO_COMMAND, {} },
+            { "note-input-realtime-manual", TOGGLE_NOTE_INPUT_REALTIME_MANUAL_COMMAND, {} },
+            { "note-input-timewise", TOGGLE_NOTE_INPUT_TIMEWISE_COMMAND, {} },
+            { "realtime-advance", REALTIME_ADVANCE_COMMAND, {} },
+            { "note-longa", SET_DURATION_LONGA_COMMAND, {} },
+            { "note-breve", SET_DURATION_BREVE_COMMAND, {} },
+            { "pad-note-1", SET_DURATION_WHOLE_COMMAND, {} },
+            { "pad-note-2", SET_DURATION_HALF_COMMAND, {} },
+            { "pad-note-4", SET_DURATION_QUARTER_COMMAND, {} },
+            { "pad-note-8", SET_DURATION_EIGHTH_COMMAND, {} },
+            { "pad-note-16", SET_DURATION_16TH_COMMAND, {} },
+            { "pad-note-32", SET_DURATION_32ND_COMMAND, {} },
+            { "pad-note-64", SET_DURATION_64TH_COMMAND, {} },
+            { "pad-note-128", SET_DURATION_128TH_COMMAND, {} },
+            { "pad-note-256", SET_DURATION_256TH_COMMAND, {} },
+            { "pad-note-512", SET_DURATION_512TH_COMMAND, {} },
+            { "pad-note-1024", SET_DURATION_1024TH_COMMAND, {} },
+            { "double-duration", SET_DOUBLE_DURATION_COMMAND, {} },
+            { "half-duration", SET_HALVE_DURATION_COMMAND, {} },
+            { "inc-duration-dotted", SET_DOUBLE_DURATION_DOTTED_COMMAND, {} },
+            { "dec-duration-dotted", SET_HALVE_DURATION_DOTTED_COMMAND, {} },
+            { "pad-dot", TOGGLE_DOT_COMMAND, {} },
+            { "pad-dot2", TOGGLE_DOT2_COMMAND, {} },
+            { "pad-dot3", TOGGLE_DOT3_COMMAND, {} },
+            { "pad-dot4", TOGGLE_DOT4_COMMAND, {} },
+            { "pad-rest", TOGGLE_REST_COMMAND, {} },
+            { "flat2", TOGGLE_FLAT2_COMMAND, {} },
+            { "flat", TOGGLE_FLAT_COMMAND, {} },
+            { "nat", TOGGLE_NAT_COMMAND, {} },
+            { "sharp", TOGGLE_SHARP_COMMAND, {} },
+            { "sharp2", TOGGLE_SHARP2_COMMAND, {} },
+            { "sharp2-post", ADD_SHARP2_COMMAND, {} },
+            { "sharp-post", ADD_SHARP_COMMAND, {} },
+            { "nat-post", ADD_NAT_COMMAND, {} },
+            { "flat-post", ADD_FLAT_COMMAND, {} },
+            { "flat2-post", ADD_FLAT2_COMMAND, {} },
+            { "tie", TOGGLE_TIE_COMMAND, {} },
+            { "chord-tie", TOGGLE_TIE_COMMAND, {} }, // removed, now as 'tie'
+            { "lv", TOGGLE_LV_COMMAND, {} },
+            { "add-slur", ADD_SLUR_COMMAND, {} },
+            { "add-marcato", TOGGLE_MARCATO_COMMAND, {} },
+            { "add-sforzato", TOGGLE_SFORZATO_COMMAND, {} },
+            { "add-tenuto", TOGGLE_TENUTO_COMMAND, {} },
+            { "add-staccato", TOGGLE_STACCATO_COMMAND, {} },
+            { "voice-1", USE_VOICE_1_COMMAND, {} },
+            { "voice-2", USE_VOICE_2_COMMAND, {} },
+            { "voice-3", USE_VOICE_3_COMMAND, {} },
+            { "voice-4", USE_VOICE_4_COMMAND, {} },
+            { "voice-x12", SWAP_VOICE_X12_COMMAND, {} },
+            { "voice-x13", SWAP_VOICE_X13_COMMAND, {} },
+            { "voice-x14", SWAP_VOICE_X14_COMMAND, {} },
+            { "voice-x23", SWAP_VOICE_X23_COMMAND, {} },
+            { "voice-x24", SWAP_VOICE_X24_COMMAND, {} },
+            { "voice-x34", SWAP_VOICE_X34_COMMAND, {} },
+            { "flip", FLIP_COMMAND, {} },
+            { "flip-horizontally", FLIP_HORIZONTALLY_COMMAND, {} },
+            { "note-c", ENTER_NOTE_C_COMMAND, {} },
+            { "note-d", ENTER_NOTE_D_COMMAND, {} },
+            { "note-e", ENTER_NOTE_E_COMMAND, {} },
+            { "note-f", ENTER_NOTE_F_COMMAND, {} },
+            { "note-g", ENTER_NOTE_G_COMMAND, {} },
+            { "note-a", ENTER_NOTE_A_COMMAND, {} },
+            { "note-b", ENTER_NOTE_B_COMMAND, {} },
+            { "chord-c", ADD_NOTE_C_COMMAND, {} },
+            { "chord-d", ADD_NOTE_D_COMMAND, {} },
+            { "chord-e", ADD_NOTE_E_COMMAND, {} },
+            { "chord-f", ADD_NOTE_F_COMMAND, {} },
+            { "chord-g", ADD_NOTE_G_COMMAND, {} },
+            { "chord-a", ADD_NOTE_A_COMMAND, {} },
+            { "chord-b", ADD_NOTE_B_COMMAND, {} },
+            { "insert-c", INSERT_NOTE_C_COMMAND, {} },
+            { "insert-d", INSERT_NOTE_D_COMMAND, {} },
+            { "insert-e", INSERT_NOTE_E_COMMAND, {} },
+            { "insert-f", INSERT_NOTE_F_COMMAND, {} },
+            { "insert-g", INSERT_NOTE_G_COMMAND, {} },
+            { "insert-a", INSERT_NOTE_A_COMMAND, {} },
+            { "insert-b", INSERT_NOTE_B_COMMAND, {} },
+            { "rest", ENTER_REST_COMMAND, {} },
+            { "duplet", ADD_DUPLET_COMMAND, {} },
+            { "triplet", ADD_TRIPLET_COMMAND, {} },
+            { "quadruplet", ADD_QUADRUPLET_COMMAND, {} },
+            { "quintuplet", ADD_QUINTUPLET_COMMAND, {} },
+            { "sextuplet", ADD_SEXTUPLET_COMMAND, {} },
+            { "septuplet", ADD_SEPTUPLET_COMMAND, {} },
+            { "octuplet", ADD_OCTUPLET_COMMAND, {} },
+            { "nonuplet", ADD_NONUPLET_COMMAND, {} },
+            { "tuplet-dialog", OPEN_TUPLET_CONFIGURE_COMMAND, {} },
+            { "first-element", GOTO_FIRST_ELEMENT_COMMAND, {} },
+            { "last-element", GOTO_LAST_ELEMENT_COMMAND, {} },
+            { "next-element", GOTO_NEXT_ELEMENT_COMMAND, {} },
+            { "prev-element", GOTO_PREV_ELEMENT_COMMAND, {} },
+            { "next-segment-element", GOTO_NEXT_SEGMENT_ELEMENT_COMMAND, {} },
+            { "prev-segment-element", GOTO_PREV_SEGMENT_ELEMENT_COMMAND, {} },
+            { "next-track", GOTO_NEXT_TRACK_COMMAND, {} },
+            { "prev-track", GOTO_PREV_TRACK_COMMAND, {} },
+            { "next-frame", GOTO_NEXT_FRAME_COMMAND, {} },
+            { "prev-frame", GOTO_PREV_FRAME_COMMAND, {} },
+            { "next-system", GOTO_NEXT_SYSTEM_COMMAND, {} },
+            { "prev-system", GOTO_PREV_SYSTEM_COMMAND, {} },
+            { "up-chord", GOTO_UPNOTE_IN_CHORD_COMMAND, {} },
+            { "down-chord", GOTO_DOWNNOTE_IN_CHORD_COMMAND, {} },
+            { "top-chord", GOTO_TOPNOTE_IN_CHORD_COMMAND, {} },
+            { "bottom-chord", GOTO_BOTTOMNOTE_IN_CHORD_COMMAND, {} },
+            { "top-staff", GOTO_TOP_STAFF_COMMAND, {} },
+            { "empty-trailing-measure", GOTO_EMPTY_TRAILING_MEASURE_COMMAND, {} },
+            { "select-similar", SELECT_SIMILAR_COMMAND, {} },
+            { "select-similar-staff", SELECT_SIMILAR_IN_STAFF_COMMAND, {} },
+            { "select-similar-range", SELECT_SIMILAR_IN_RANGE_COMMAND, {} },
+            { "select-notes-in-chord", SELECT_NOTES_IN_CHORD_COMMAND, {} },
+            { "notation-select-all", SELECT_ALL_COMMAND, {} },
+            { "notation-select-section", SELECT_SECTION_COMMAND, {} },
+            { "select-dialog", OPEN_SELECTION_OPTIONS_COMMAND, {} },
+            { "next-beat-TEXT", EDITTEXT_NEXT_BEAT_COMMAND, {} },
+            { "prev-beat-TEXT", EDITTEXT_PREV_BEAT_COMMAND, {} },
+            { "advance-longa", EDITTEXT_ADVANCE_LONGA_COMMAND, {} },
+            { "advance-breve", EDITTEXT_ADVANCE_BREVE_COMMAND, {} },
+            { "advance-1", EDITTEXT_ADVANCE_1_COMMAND, {} },
+            { "advance-2", EDITTEXT_ADVANCE_2_COMMAND, {} },
+            { "advance-4", EDITTEXT_ADVANCE_4_COMMAND, {} },
+            { "advance-8", EDITTEXT_ADVANCE_8_COMMAND, {} },
+            { "advance-16", EDITTEXT_ADVANCE_16_COMMAND, {} },
+            { "advance-32", EDITTEXT_ADVANCE_32_COMMAND, {} },
+            { "advance-64", EDITTEXT_ADVANCE_64_COMMAND, {} },
+            { "next-lyric-verse", EDITLYRIC_NEXT_VERSE_COMMAND, {} },
+            { "prev-lyric-verse", EDITLYRIC_PREV_VERSE_COMMAND, {} },
+            { "next-syllable", EDITLYRIC_NEXT_SYLLABLE_COMMAND, {} },
+            { "add-melisma", EDITLYRIC_ADD_MELISMA_COMMAND, {} },
+            { "add-lyric-verse", EDITLYRIC_ADD_VERSE_COMMAND, {} },
+            { "toggle-visible", TOGGLE_VISIBLE_COMMAND, {} },
+            { "toggle-snap-to-previous", TOGGLE_SNAP_TO_PREV_COMMAND, {} },
+            { "toggle-snap-to-next", TOGGLE_SNAP_TO_NEXT_COMMAND, {} },
+            { "system-break", TOGGLE_SYSTEM_BREAK_COMMAND, {} },
+            { "page-break", TOGGLE_PAGE_BREAK_COMMAND, {} },
+            { "section-break", TOGGLE_SECTION_BREAK_COMMAND, {} },
+            { "apply-system-lock", APPLY_SYSTEM_LOCK_COMMAND, {} },
+            { "toggle-system-lock", TOGGLE_SYSTEM_LOCK_COMMAND, {} },
+            { "apply-page-lock", APPLY_PAGE_LOCK_COMMAND, {} },
+            { "toggle-page-lock", TOGGLE_PAGE_LOCK_COMMAND, {} },
+            { "toggle-score-lock", TOGGLE_SCORE_LOCK_COMMAND, {} },
+            { "make-into-system", MAKE_INTO_SYSTEM_COMMAND, {} },
+            { "make-into-page", MAKE_INTO_PAGE_COMMAND, {} },
+            { "move-measure-to-prev-system", MOVE_MEASURE_TO_PREV_SYSTEM_COMMAND, {} },
+            { "move-measure-to-next-system", MOVE_MEASURE_TO_NEXT_SYSTEM_COMMAND, {} },
+            { "move-system-to-prev-page", MOVE_SYSTEM_TO_PREV_PAGE_COMMAND, {} },
+            { "move-system-to-next-page", MOVE_SYSTEM_TO_NEXT_PAGE_COMMAND, {} },
+            { "split-measure", SPLIT_MEASURE_COMMAND, {} },
+            { "join-measures", JOIN_MEASURES_COMMAND, {} },
+            { "insert-measure", INSERT_MEASURE_COMMAND, {} },
+            { "append-measure", APPEND_MEASURE_COMMAND, {} },
+            { "insert-hbox", INSERT_HBOX_COMMAND, {} },
+            { "insert-vbox", INSERT_VBOX_COMMAND, {} },
+            { "insert-textframe", INSERT_TEXTFRAME_COMMAND, {} },
+            { "insert-fretframe", INSERT_FRETFRAME_COMMAND, {} },
+            { "append-hbox", APPEND_HBOX_COMMAND, {} },
+            { "append-vbox", APPEND_VBOX_COMMAND, {} },
+            { "append-textframe", APPEND_TEXTFRAME_COMMAND, {} },
+            { "append-fretframe", APPEND_FRETFRAME_COMMAND, {} },
+            { "page-settings", OPEN_PAGE_SETTINGS_COMMAND, {} },
+            { "staff-properties", OPEN_STAFF_PROPERTIES_COMMAND, {} },
+            { "edit-strings", OPEN_EDIT_STRINGS_COMMAND, {} },
+            { "measures-per-system", OPEN_BREAKS_COMMAND, {} },
+            { "staff-text-properties", OPEN_STAFF_TEXT_PROPERTIES_COMMAND, {} },
+            { "system-text-properties", OPEN_SYSTEM_TEXT_PROPERTIES_COMMAND, {} },
+            { "measure-properties", OPEN_MEASURE_PROPERTIES_COMMAND, {} },
+            { "transpose", OPEN_TRANSPOSE_COMMAND, {} },
+            { "parts", OPEN_PARTS_COMMAND, {} },
+            { "config-raster", OPEN_EDITGRIDSIZE_COMMAND, {} },
+            { "realize-chord-symbols", OPEN_REALIZECHORDSYMBOLS_COMMAND, {} },
+            { "load-style", LOAD_STYLE_COMMAND, {} },
+            { "save-style", SAVE_STYLE_COMMAND, {} },
+            { "add-fretboard-diagram", ADD_FRETBOARD_DIAGRAM_COMMAND, {} },
+            { "add-ottava-8va", ADD_OTTAVA_8VA_COMMAND, {} },
+            { "add-ottava-8vb", ADD_OTTAVA_8VB_COMMAND, {} },
+            { "add-dynamic", ADD_DYNAMIC_COMMAND, {} },
+            { "add-hairpin", ADD_HAIRPIN_COMMAND, {} },
+            { "add-hairpin-reverse", ADD_HAIRPIN_REVERSE_COMMAND, {} },
+            { "add-noteline", ADD_NOTELINE_COMMAND, {} },
+            { "add-image", ADD_IMAGE_COMMAND, {} },
+            { "stretch-decrease", STRETCH_DECREASE_COMMAND, {} },
+            { "stretch-increase", STRETCH_INCREASE_COMMAND, {} },
+            { "stretch-reset", STRETCH_RESET_COMMAND, {} },
+            { "title-text", ADD_TITLE_TEXT_COMMAND, {} },
+            { "subtitle-text", ADD_SUBTITLE_TEXT_COMMAND, {} },
+            { "composer-text", ADD_COMPOSER_TEXT_COMMAND, {} },
+            { "poet-text", ADD_LYRICIST_TEXT_COMMAND, {} },
+            { "part-text", ADD_PART_TEXT_COMMAND, {} },
+            { "frame-text", ADD_FRAME_TEXT_COMMAND, {} },
+            { "system-text", ADD_SYSTEM_TEXT_COMMAND, {} },
+            { "staff-text", ADD_STAFF_TEXT_COMMAND, {} },
+            { "expression-text", ADD_EXPRESSION_TEXT_COMMAND, {} },
+            { "rehearsalmark-text", ADD_REHEARSALMARK_TEXT_COMMAND, {} },
+            { "instrument-change-text", ADD_INSTRUMENT_CHANGE_TEXT_COMMAND, {} },
+            { "fingering-text", ADD_FINGERING_TEXT_COMMAND, {} },
+            { "sticking-text", ADD_STICKING_TEXT_COMMAND, {} },
+            { "chord-text", ADD_CHORD_TEXT_COMMAND, {} },
+            { "roman-numeral-text", ADD_ROMAN_NUMERAL_TEXT_COMMAND, {} },
+            { "nashville-number-text", ADD_NASHVILLE_NUMBER_TEXT_COMMAND, {} },
+            { "lyrics", ADD_LYRICS_COMMAND, {} },
+            { "tempo", ADD_TEMPO_COMMAND, {} },
+            { "figured-bass", ADD_FIGURED_BASS_COMMAND, {} },
+            { "reset-text-style-overrides", RESET_TEXT_STYLE_OVERRIDES_COMMAND, {} },
+            { "reset-beammode", RESET_BEAMS_COMMAND, {} },
+            { "reset", RESET_SHAPES_AND_POSITIONS_COMMAND, {} },
+            { "reset-to-default-layout", RESET_TO_DEFAULT_LAYOUT_COMMAND, {} },
+            { "show-invisible", SHOW_INVISIBLE_COMMAND, {} },
+            { "show-unprintable", SHOW_UNPRINTABLE_COMMAND, {} },
+            { "show-frames", SHOW_FRAMES_COMMAND, {} },
+            { "show-pageborders", SHOW_PAGEBORDERS_COMMAND, {} },
+            { "show-soundflags", SHOW_SOUNDFLAGS_COMMAND, {} },
+            { "show-irregular", SHOW_IRREGULAR_COMMAND, {} },
+            { "explode", STAFF_EXPLODE_COMMAND, {} },
+            { "implode", STAFF_IMPLODE_COMMAND, {} },
+            { "concert-pitch", TOGGLE_CONCERT_PITCH_COMMAND, {} },
+            { "acciaccatura", ADD_ACCIACCATURA_COMMAND, {} },
+            { "appoggiatura", ADD_APPOGGIATURA_COMMAND, {} },
+            { "grace4", ADD_GRACE4_COMMAND, {} },
+            { "grace16", ADD_GRACE16_COMMAND, {} },
+            { "grace32", ADD_GRACE32_COMMAND, {} },
+            { "grace8after", ADD_GRACE8_AFTER_COMMAND, {} },
+            { "grace16after", ADD_GRACE16_AFTER_COMMAND, {} },
+            { "grace32after", ADD_GRACE32_AFTER_COMMAND, {} },
+            { "beam-auto", ADD_BEAM_AUTO_COMMAND, {} },
+            { "beam-none", ADD_BEAM_NONE_COMMAND, {} },
+            { "beam-break-left", ADD_BEAM_BEGIN_COMMAND, {} },
+            { "beam-break-inner-8th", ADD_BEAM_BEGIN16_COMMAND, {} },
+            { "beam-break-inner-16th", ADD_BEAM_BEGIN32_COMMAND, {} },
+            { "beam-join", ADD_BEAM_MID_COMMAND, {} },
+            { "beam-selected-range", ADD_BEAM_SELECTED_RANGE_COMMAND, {} },
+            { "add-brackets", ADD_BRACKETS_COMMAND, {} },
+            { "add-parentheses", ADD_PARENTHESES_COMMAND, {} },
+            { "add-braces", ADD_BRACES_COMMAND, {} },
+            { "add-turn", ADD_TURN_COMMAND, {} },
+            { "add-turn-inverted", ADD_TURN_INVERTED_COMMAND, {} },
+            { "add-turn-slash", ADD_TURN_SLASH_COMMAND, {} },
+            { "add-turn-up", ADD_TURN_UP_COMMAND, {} },
+            { "add-turn-inverted-up", ADD_TURN_INVERTED_UP_COMMAND, {} },
+            { "add-trill", ADD_TRILL_COMMAND, {} },
+            { "add-short-trill", ADD_SHORT_TRILL_COMMAND, {} },
+            { "add-mordent", ADD_MORDENT_COMMAND, {} },
+            { "add-haydn", ADD_HAYDN_COMMAND, {} },
+            { "add-tremblement", ADD_TREMBLEMENT_COMMAND, {} },
+            { "add-prall-mordent", ADD_PRALL_MORDENT_COMMAND, {} },
+            { "add-shake", ADD_SHAKE_COMMAND, {} },
+            { "add-shake-muffat", ADD_SHAKE_MUFFAT_COMMAND, {} },
+            { "add-tremblement-couperin", ADD_TREMBLEMENT_COUPERIN_COMMAND, {} },
+            { "select-next-chord", ADD_TO_SELECTION_NEXT_CHORD_COMMAND, {} },
+            { "select-prev-chord", ADD_TO_SELECTION_PREV_CHORD_COMMAND, {} },
+            { "select-next-measure", ADD_TO_SELECTION_NEXT_MEASURE_COMMAND, {} },
+            { "select-prev-measure", ADD_TO_SELECTION_PREV_MEASURE_COMMAND, {} },
+            { "select-above-staff", ADD_TO_SELECTION_ABOVE_STAFF_COMMAND, {} },
+            { "select-below-staff", ADD_TO_SELECTION_BELOW_STAFF_COMMAND, {} },
+            { "select-begin-line", ADD_TO_SELECTION_BEGIN_SYSTEM_COMMAND, {} },
+            { "select-end-line", ADD_TO_SELECTION_END_SYSTEM_COMMAND, {} },
+            { "select-begin-score", ADD_TO_SELECTION_BEGIN_SCORE_COMMAND, {} },
+            { "select-end-score", ADD_TO_SELECTION_END_SCORE_COMMAND, {} },
+            { "extend-to-next-note", EXTEND_TO_NEXT_NOTE_COMMAND, {} },
+            { "time-delete", REMOVE_SELECTED_RANGE_COMMAND, {} },
+            { "del-empty-measures", REMOVE_EMPTY_TRAILING_MEASURES_COMMAND, {} },
+            { "slash-fill", SLASH_FILL_COMMAND, {} },
+            { "slash-rhythm", SLASH_RHYTHM_COMMAND, {} },
+            { "pitch-spell", PITCH_SPELL_COMMAND, {} },
+            { "pitch-spell-sharps", PITCH_SPELL_SHARPS_COMMAND, {} },
+            { "pitch-spell-flats", PITCH_SPELL_FLATS_COMMAND, {} },
+            { "enh-both", ENHARMONIC_SPELL_BOTH_COMMAND, {} },
+            { "enh-current", ENHARMONIC_SPELL_CURRENT_COMMAND, {} },
+            { "reset-groupings", REGROUP_RHYTHMS_COMMAND, {} },
+            { "resequence-rehearsal-marks", RESEQUENCE_REHEARSAL_MARKS_COMMAND, {} },
+            { "unroll-repeats", UNROLL_REPEATS_COMMAND, {} },
+            { "copy-lyrics-to-clipboard", COPY_LYRICS_COMMAND, {} },
+            { "repeat-selection", REPEAT_SELECTION_COMMAND, {} },
+            { "add-up-bow", ADD_UP_BOW_COMMAND, {} },
+            { "add-down-bow", ADD_DOWN_BOW_COMMAND, {} },
+            { "transpose-up", TRANSPOSE_UP_COMMAND, {} },
+            { "transpose-down", TRANSPOSE_DOWN_COMMAND, {} },
+            { "toggle-insert-mode", TOGGLE_INSERT_MODE_COMMAND, {} },
+            { "get-location", GET_LOCATION_COMMAND, {} },
+            { "toggle-mmrest", TOGGLE_MMREST_COMMAND, {} },
+            { "toggle-hide-empty", TOGGLE_HIDE_EMPTY_COMMAND, {} },
+            { "mirror-note", MIRROR_NOTEHEAD_COMMAND, {} },
+            { "set-visible", SET_VISIBLE_COMMAND, {} },
+            { "unset-visible", UNSET_VISIBLE_COMMAND, {} },
+            { "toggle-autoplace", TOGGLE_AUTOPLACE_COMMAND, {} },
+            { "autoplace-enabled", AUTOPLACE_ENABLED_COMMAND, {} },
+            { "full-measure-rest", ADD_FULL_MEASURE_REST_COMMAND, {} },
+            { "interval1", ADD_INTERVAL_PLUS_1_COMMAND, {} },
+            { "interval2", ADD_INTERVAL_PLUS_2_COMMAND, {} },
+            { "interval3", ADD_INTERVAL_PLUS_3_COMMAND, {} },
+            { "interval4", ADD_INTERVAL_PLUS_4_COMMAND, {} },
+            { "interval5", ADD_INTERVAL_PLUS_5_COMMAND, {} },
+            { "interval6", ADD_INTERVAL_PLUS_6_COMMAND, {} },
+            { "interval7", ADD_INTERVAL_PLUS_7_COMMAND, {} },
+            { "interval8", ADD_INTERVAL_PLUS_8_COMMAND, {} },
+            { "interval9", ADD_INTERVAL_PLUS_9_COMMAND, {} },
+            { "interval10", ADD_INTERVAL_PLUS_10_COMMAND, {} },
+            { "interval-2", ADD_INTERVAL_MINUS_2_COMMAND, {} },
+            { "interval-3", ADD_INTERVAL_MINUS_3_COMMAND, {} },
+            { "interval-4", ADD_INTERVAL_MINUS_4_COMMAND, {} },
+            { "interval-5", ADD_INTERVAL_MINUS_5_COMMAND, {} },
+            { "interval-6", ADD_INTERVAL_MINUS_6_COMMAND, {} },
+            { "interval-7", ADD_INTERVAL_MINUS_7_COMMAND, {} },
+            { "interval-8", ADD_INTERVAL_MINUS_8_COMMAND, {} },
+            { "interval-9", ADD_INTERVAL_MINUS_9_COMMAND, {} },
+            { "interval-10", ADD_INTERVAL_MINUS_10_COMMAND, {} },
+            { "voice-assignment-all-in-instrument", VOICE_ASSIGNMENT_ALL_IN_INSTR_COMMAND, {} },
+            { "voice-assignment-all-in-staff", VOICE_ASSIGNMENT_ALL_IN_STAFF_COMMAND, {} },
+            { "pad-note-1-TAB", SET_DURATION_WHOLE_TAB_COMMAND, {} },
+            { "pad-note-2-TAB", SET_DURATION_HALF_TAB_COMMAND, {} },
+            { "pad-note-4-TAB", SET_DURATION_QUARTER_TAB_COMMAND, {} },
+            { "pad-note-8-TAB", SET_DURATION_EIGHTH_TAB_COMMAND, {} },
+            { "pad-note-16-TAB", SET_DURATION_16TH_TAB_COMMAND, {} },
+            { "pad-note-32-TAB", SET_DURATION_32ND_TAB_COMMAND, {} },
+            { "pad-note-64-TAB", SET_DURATION_64TH_TAB_COMMAND, {} },
+            { "pad-note-128-TAB", SET_DURATION_128TH_TAB_COMMAND, {} },
+            { "pad-note-256-TAB", SET_DURATION_256TH_TAB_COMMAND, {} },
+            { "pad-note-512-TAB", SET_DURATION_512TH_TAB_COMMAND, {} },
+            { "pad-note-1024-TAB", SET_DURATION_1024TH_TAB_COMMAND, {} },
+            { "rest-TAB", ENTER_REST_TAB_COMMAND, {} },
+            { "fret-0", ENTER_FRET_0_COMMAND, {} },
+            { "fret-1", ENTER_FRET_1_COMMAND, {} },
+            { "fret-2", ENTER_FRET_2_COMMAND, {} },
+            { "fret-3", ENTER_FRET_3_COMMAND, {} },
+            { "fret-4", ENTER_FRET_4_COMMAND, {} },
+            { "fret-5", ENTER_FRET_5_COMMAND, {} },
+            { "fret-6", ENTER_FRET_6_COMMAND, {} },
+            { "fret-7", ENTER_FRET_7_COMMAND, {} },
+            { "fret-8", ENTER_FRET_8_COMMAND, {} },
+            { "fret-9", ENTER_FRET_9_COMMAND, {} },
+            { "fret-10", ENTER_FRET_10_COMMAND, {} },
+            { "fret-11", ENTER_FRET_11_COMMAND, {} },
+            { "fret-12", ENTER_FRET_12_COMMAND, {} },
+            { "fret-13", ENTER_FRET_13_COMMAND, {} },
+            { "fret-14", ENTER_FRET_14_COMMAND, {} },
+            { "standard-bend", ADD_STANDARD_BEND_COMMAND, {} },
+            { "pre-bend", ADD_PRE_BEND_COMMAND, {} },
+            { "grace-note-bend", ADD_GRACE_NOTE_BEND_COMMAND, {} },
+            { "slight-bend", ADD_SLIGHT_BEND_COMMAND, {} },
+            { "dive", ADD_DIVE_COMMAND, {} },
+            { "pre-dive", ADD_PRE_DIVE_COMMAND, {} },
+            { "dip", ADD_DIP_COMMAND, {} },
+            { "scoop", ADD_SCOOP_COMMAND, {} },
+            { "hammer-on-pull-off", ADD_HAMMER_ON_PULL_OFF_COMMAND, {} },
+            { "toggle-automation", TOGGLE_AUTOMATION_COMMAND, {} },
+            { "string-up", GOTO_STRING_ABOVE_COMMAND, {} },
+            { "string-down", GOTO_STRING_BELOW_COMMAND, {} },
+            { "move-up", MOVE_UP_COMMAND, {} },
+            { "move-down", MOVE_DOWN_COMMAND, {} },
+            { "move-left", SWAP_LEFT_COMMAND, {} },
+            { "move-right", SWAP_RIGHT_COMMAND, {} },
+            { "custom-tuplet", ADD_TUPLET_COMMAND, tupletOptions },
+            { "insert-measures", INSERT_MEASURES_COMMAND, make_conv({ { "count", param<int> } }) },
+            { "insert-measures-after-selection", INSERT_MEASURES_AFTER_SELECTION_COMMAND, make_conv({ { "count", param<int> } }) },
+            { "insert-measures-at-start-of-score", INSERT_MEASURES_AT_START_OF_SCORE_COMMAND, make_conv({ { "count", param<int> } }) },
+            { "append-measures", APPEND_MEASURES_COMMAND, make_conv({ { "count", param<int> } }) },
+            { "edit-style", OPEN_EDIT_STYLE_COMMAND, make_conv({ { "page_code", param<std::string> },
+                                                                   { "sub_page_code", param<std::string> } }) },
+            { "zoomin", ZOOM_IN_COMMAND, {} },
+            { "zoomout", ZOOM_OUT_COMMAND, {} },
+            { "zoom-page-width", ZOOM_TO_PAGE_WIDTH_COMMAND, {} },
+            { "zoom-whole-page", ZOOM_TO_WHOLE_PAGE_COMMAND, {} },
+            { "zoom-two-pages", ZOOM_TO_TWO_PAGES_COMMAND, {} },
+            { "zoom100", ZOOM_TO_100_COMMAND, {} },
+            { "zoom-x-percent", ZOOM_TO_PERCENT_COMMAND, make_conv({ { "percent", param<int> } }) },
+            { "view-mode-page", VIEW_MODE_PAGE_COMMAND, {} },
+            { "view-mode-float", VIEW_MODE_FLOAT_COMMAND, {} },
+            { "view-mode-continuous", VIEW_MODE_CONTINUOUS_COMMAND, {} },
+            { "view-mode-single", VIEW_MODE_SINGLE_COMMAND, {} },
+            { "scr-next", NEXT_SCREEN_COMMAND, {} },
+            { "scr-prev", PREV_SCREEN_COMMAND, {} },
+            { "page-next", NEXT_PAGE_COMMAND, {} },
+            { "page-prev", PREV_PAGE_COMMAND, {} },
+            { "page-top", TOP_OF_FIRST_PAGE_COMMAND, {} },
+            { "page-end", BOTTOM_OF_LAST_PAGE_COMMAND, {} },
+            { "notation-context-menu", CONTEXT_MENU_OF_SELECTION_COMMAND, {} },
+        };
+
+        rcommand::registerActionToCommand(this, actionToCommand, commandDispatcher(), dispatcher());
+    }
 
     // listen on state changes
     globalContext()->currentNotationChanged().onNotify(this, [this]() {
@@ -695,466 +1132,17 @@ void NotationActionController::init()
         });
     }
     dispatcher()->reg(this, "check-for-score-corruptions", [this] { checkForScoreCorruptions(); });
+}
 
-    // compat
-    {
-        // with params
-        using Convertor = std::function<muse::rcommand::CommandQuery (const rcommand::Command&, const ActionData&)>;
-        struct ActionToCommandWithParams {
-            ActionCode actionCode;
-            muse::rcommand::Command command;
-            Convertor convertor;
-        };
+void NotationActionController::setViewController(INotationViewController* controller)
+{
+    m_viewController = controller;
+    LOGD() << "view controller changed";
+}
 
-        // convertors
-        // generic convertor
-        struct ParamSpec {
-            std::string name;
-            std::function<Val(const ActionData&, int)> param;
-        };
-
-        auto make_conv = [](const std::vector<ParamSpec>& specs) -> Convertor {
-            return [specs](const rcommand::Command& command, const ActionData& args) -> muse::rcommand::CommandQuery {
-                muse::rcommand::CommandQuery query(command);
-                if (args.empty()) {
-                    return query;
-                }
-
-                IF_ASSERT_FAILED(args.count() <= static_cast<int>(specs.size())) {
-                    return query;
-                }
-
-                for (int i = 0; i < args.count(); ++i) {
-                    query.set(specs[i].name, specs[i].param(args, i));
-                }
-                return query;
-            };
-        };
-
-        // tuplet options convertor
-        auto tupletOptions = [](const rcommand::Command& command, const ActionData& args) -> muse::rcommand::CommandQuery {
-            IF_ASSERT_FAILED(args.count() > 0) {
-                return muse::rcommand::CommandQuery();
-            }
-            TupletOptions options = args.arg<TupletOptions>(0);
-
-            rcommand::CommandQuery query(command);
-            query.addParam("ratio", Val(options.ratio.toString().toStdString()));
-            query.addParam("number-type", Val(engraving::str_conv(options.numberType)));
-            query.addParam("bracket-type", Val(engraving::str_conv(options.bracketType)));
-            query.addParam("auto-baselen", Val(options.autoBaseLen));
-            return query;
-        };
-
-        static std::map<ActionCode, rcommand::Command> actionToCommand = {
-            { "action://notation/copy", COPY_COMMAND },
-            { "action://notation/cut", CUT_COMMAND },
-            { "action://notation/paste", PASTE_COMMAND },
-            { "notation-paste-half", PASTE_HALF_COMMAND },
-            { "notation-paste-double", PASTE_DOUBLE_COMMAND },
-            { "notation-paste-special", PASTE_SPECIAL_COMMAND },
-            { "notation-swap", COPY_PASTE_SWAP_COMMAND },
-            { "action://notation/delete", DELETE_COMMAND },
-            { "action://notation/cancel", CANCEL_COMMAND },
-            { "action://notation/undo", UNDO_COMMAND },
-            { "action://notation/redo", REDO_COMMAND },
-            { "action://copy", COPY_COMMAND },
-            { "action://cut", CUT_COMMAND },
-            { "action://paste", PASTE_COMMAND },
-            { "action://delete", DELETE_COMMAND },
-            { "action://cancel", CANCEL_COMMAND },
-            { "action://undo", UNDO_COMMAND },
-            { "action://redo", REDO_COMMAND },
-            { "notation-move-right", MOVE_RIGHT_COMMAND },
-            { "notation-move-left", MOVE_LEFT_COMMAND },
-            { "notation-move-right-quickly", MOVE_RIGHT_QUICKLY_COMMAND },
-            { "notation-move-left-quickly", MOVE_LEFT_QUICKLY_COMMAND },
-            { "pitch-up", PITCH_UP_COMMAND },
-            { "pitch-down", PITCH_DOWN_COMMAND },
-            { "pitch-up-octave", PITCH_UP_OCTAVE_COMMAND },
-            { "pitch-down-octave", PITCH_DOWN_OCTAVE_COMMAND },
-            { "pitch-up-diatonic", PITCH_UP_DIATONIC_COMMAND },
-            { "pitch-down-diatonic", PITCH_DOWN_DIATONIC_COMMAND },
-            { "pitch-up-diatonic-alterations", PITCH_UP_DIATONIC_ALTERATIONS_COMMAND },
-            { "pitch-down-diatonic-alterations", PITCH_DOWN_DIATONIC_ALTERATIONS_COMMAND },
-            { "next-word", EDITTEXT_NEXT_WORD_COMMAND },
-            { "next-text-element", EDITTEXT_NEXT_ELEMENT_COMMAND },
-            { "prev-text-element", EDITTEXT_PREV_ELEMENT_COMMAND },
-            { "note-input", TOGGLE_NOTE_INPUT_COMMAND },
-            { "note-input-by-note-name", TOGGLE_NOTE_INPUT_BY_NOTE_NAME_COMMAND },
-            { "note-input-by-duration", TOGGLE_NOTE_INPUT_BY_DURATION_COMMAND },
-            { "note-input-rhythm", TOGGLE_NOTE_INPUT_RHYTHM_COMMAND },
-            { "note-input-repitch", TOGGLE_NOTE_INPUT_REPITCH_COMMAND },
-            { "note-input-realtime-auto", TOGGLE_NOTE_INPUT_REALTIME_AUTO_COMMAND },
-            { "note-input-realtime-manual", TOGGLE_NOTE_INPUT_REALTIME_MANUAL_COMMAND },
-            { "note-input-timewise", TOGGLE_NOTE_INPUT_TIMEWISE_COMMAND },
-            { "realtime-advance", REALTIME_ADVANCE_COMMAND },
-            { "note-longa", SET_DURATION_LONGA_COMMAND },
-            { "note-breve", SET_DURATION_BREVE_COMMAND },
-            { "pad-note-1", SET_DURATION_WHOLE_COMMAND },
-            { "pad-note-2", SET_DURATION_HALF_COMMAND },
-            { "pad-note-4", SET_DURATION_QUARTER_COMMAND },
-            { "pad-note-8", SET_DURATION_EIGHTH_COMMAND },
-            { "pad-note-16", SET_DURATION_16TH_COMMAND },
-            { "pad-note-32", SET_DURATION_32ND_COMMAND },
-            { "pad-note-64", SET_DURATION_64TH_COMMAND },
-            { "pad-note-128", SET_DURATION_128TH_COMMAND },
-            { "pad-note-256", SET_DURATION_256TH_COMMAND },
-            { "pad-note-512", SET_DURATION_512TH_COMMAND },
-            { "pad-note-1024", SET_DURATION_1024TH_COMMAND },
-            { "double-duration", SET_DOUBLE_DURATION_COMMAND },
-            { "half-duration", SET_HALVE_DURATION_COMMAND },
-            { "inc-duration-dotted", SET_DOUBLE_DURATION_DOTTED_COMMAND },
-            { "dec-duration-dotted", SET_HALVE_DURATION_DOTTED_COMMAND },
-            { "pad-dot", TOGGLE_DOT_COMMAND },
-            { "pad-dot2", TOGGLE_DOT2_COMMAND },
-            { "pad-dot3", TOGGLE_DOT3_COMMAND },
-            { "pad-dot4", TOGGLE_DOT4_COMMAND },
-            { "pad-rest", TOGGLE_REST_COMMAND },
-            { "flat2", TOGGLE_FLAT2_COMMAND },
-            { "flat", TOGGLE_FLAT_COMMAND },
-            { "nat", TOGGLE_NAT_COMMAND },
-            { "sharp", TOGGLE_SHARP_COMMAND },
-            { "sharp2", TOGGLE_SHARP2_COMMAND },
-            { "sharp2-post", ADD_SHARP2_COMMAND },
-            { "sharp-post", ADD_SHARP_COMMAND },
-            { "nat-post", ADD_NAT_COMMAND },
-            { "flat-post", ADD_FLAT_COMMAND },
-            { "flat2-post", ADD_FLAT2_COMMAND },
-            { "tie", TOGGLE_TIE_COMMAND },
-            { "chord-tie", TOGGLE_TIE_COMMAND }, // removed, now as 'tie'
-            { "lv", TOGGLE_LV_COMMAND },
-            { "add-slur", ADD_SLUR_COMMAND },
-            { "add-marcato", TOGGLE_MARCATO_COMMAND },
-            { "add-sforzato", TOGGLE_SFORZATO_COMMAND },
-            { "add-tenuto", TOGGLE_TENUTO_COMMAND },
-            { "add-staccato", TOGGLE_STACCATO_COMMAND },
-            { "voice-1", USE_VOICE_1_COMMAND },
-            { "voice-2", USE_VOICE_2_COMMAND },
-            { "voice-3", USE_VOICE_3_COMMAND },
-            { "voice-4", USE_VOICE_4_COMMAND },
-            { "voice-x12", SWAP_VOICE_X12_COMMAND },
-            { "voice-x13", SWAP_VOICE_X13_COMMAND },
-            { "voice-x14", SWAP_VOICE_X14_COMMAND },
-            { "voice-x23", SWAP_VOICE_X23_COMMAND },
-            { "voice-x24", SWAP_VOICE_X24_COMMAND },
-            { "voice-x34", SWAP_VOICE_X34_COMMAND },
-            { "flip", FLIP_COMMAND },
-            { "flip-horizontally", FLIP_HORIZONTALLY_COMMAND },
-            { "note-c", ENTER_NOTE_C_COMMAND },
-            { "note-d", ENTER_NOTE_D_COMMAND },
-            { "note-e", ENTER_NOTE_E_COMMAND },
-            { "note-f", ENTER_NOTE_F_COMMAND },
-            { "note-g", ENTER_NOTE_G_COMMAND },
-            { "note-a", ENTER_NOTE_A_COMMAND },
-            { "note-b", ENTER_NOTE_B_COMMAND },
-            { "chord-c", ADD_NOTE_C_COMMAND },
-            { "chord-d", ADD_NOTE_D_COMMAND },
-            { "chord-e", ADD_NOTE_E_COMMAND },
-            { "chord-f", ADD_NOTE_F_COMMAND },
-            { "chord-g", ADD_NOTE_G_COMMAND },
-            { "chord-a", ADD_NOTE_A_COMMAND },
-            { "chord-b", ADD_NOTE_B_COMMAND },
-            { "insert-c", INSERT_NOTE_C_COMMAND },
-            { "insert-d", INSERT_NOTE_D_COMMAND },
-            { "insert-e", INSERT_NOTE_E_COMMAND },
-            { "insert-f", INSERT_NOTE_F_COMMAND },
-            { "insert-g", INSERT_NOTE_G_COMMAND },
-            { "insert-a", INSERT_NOTE_A_COMMAND },
-            { "insert-b", INSERT_NOTE_B_COMMAND },
-            { "rest", ENTER_REST_COMMAND },
-            { "duplet", ADD_DUPLET_COMMAND },
-            { "triplet", ADD_TRIPLET_COMMAND },
-            { "quadruplet", ADD_QUADRUPLET_COMMAND },
-            { "quintuplet", ADD_QUINTUPLET_COMMAND },
-            { "sextuplet", ADD_SEXTUPLET_COMMAND },
-            { "septuplet", ADD_SEPTUPLET_COMMAND },
-            { "octuplet", ADD_OCTUPLET_COMMAND },
-            { "nonuplet", ADD_NONUPLET_COMMAND },
-            { "tuplet-dialog", OPEN_TUPLET_CONFIGURE_COMMAND },
-            { "first-element", GOTO_FIRST_ELEMENT_COMMAND },
-            { "last-element", GOTO_LAST_ELEMENT_COMMAND },
-            { "next-element", GOTO_NEXT_ELEMENT_COMMAND },
-            { "prev-element", GOTO_PREV_ELEMENT_COMMAND },
-            { "next-segment-element", GOTO_NEXT_SEGMENT_ELEMENT_COMMAND },
-            { "prev-segment-element", GOTO_PREV_SEGMENT_ELEMENT_COMMAND },
-            { "next-track", GOTO_NEXT_TRACK_COMMAND },
-            { "prev-track", GOTO_PREV_TRACK_COMMAND },
-            { "next-frame", GOTO_NEXT_FRAME_COMMAND },
-            { "prev-frame", GOTO_PREV_FRAME_COMMAND },
-            { "next-system", GOTO_NEXT_SYSTEM_COMMAND },
-            { "prev-system", GOTO_PREV_SYSTEM_COMMAND },
-            { "up-chord", GOTO_UPNOTE_IN_CHORD_COMMAND },
-            { "down-chord", GOTO_DOWNNOTE_IN_CHORD_COMMAND },
-            { "top-chord", GOTO_TOPNOTE_IN_CHORD_COMMAND },
-            { "bottom-chord", GOTO_BOTTOMNOTE_IN_CHORD_COMMAND },
-            { "top-staff", GOTO_TOP_STAFF_COMMAND },
-            { "empty-trailing-measure", GOTO_EMPTY_TRAILING_MEASURE_COMMAND },
-            { "select-similar", SELECT_SIMILAR_COMMAND },
-            { "select-similar-staff", SELECT_SIMILAR_IN_STAFF_COMMAND },
-            { "select-similar-range", SELECT_SIMILAR_IN_RANGE_COMMAND },
-            { "select-notes-in-chord", SELECT_NOTES_IN_CHORD_COMMAND },
-            { "notation-select-all", SELECT_ALL_COMMAND },
-            { "notation-select-section", SELECT_SECTION_COMMAND },
-            { "select-dialog", OPEN_SELECTION_OPTIONS_COMMAND },
-            { "next-beat-TEXT", EDITTEXT_NEXT_BEAT_COMMAND },
-            { "prev-beat-TEXT", EDITTEXT_PREV_BEAT_COMMAND },
-            { "advance-longa", EDITTEXT_ADVANCE_LONGA_COMMAND },
-            { "advance-breve", EDITTEXT_ADVANCE_BREVE_COMMAND },
-            { "advance-1", EDITTEXT_ADVANCE_1_COMMAND },
-            { "advance-2", EDITTEXT_ADVANCE_2_COMMAND },
-            { "advance-4", EDITTEXT_ADVANCE_4_COMMAND },
-            { "advance-8", EDITTEXT_ADVANCE_8_COMMAND },
-            { "advance-16", EDITTEXT_ADVANCE_16_COMMAND },
-            { "advance-32", EDITTEXT_ADVANCE_32_COMMAND },
-            { "advance-64", EDITTEXT_ADVANCE_64_COMMAND },
-            { "next-lyric-verse", EDITLYRIC_NEXT_VERSE_COMMAND },
-            { "prev-lyric-verse", EDITLYRIC_PREV_VERSE_COMMAND },
-            { "next-syllable", EDITLYRIC_NEXT_SYLLABLE_COMMAND },
-            { "add-melisma", EDITLYRIC_ADD_MELISMA_COMMAND },
-            { "add-lyric-verse", EDITLYRIC_ADD_VERSE_COMMAND },
-            { "toggle-visible", TOGGLE_VISIBLE_COMMAND },
-            { "toggle-snap-to-previous", TOGGLE_SNAP_TO_PREV_COMMAND },
-            { "toggle-snap-to-next", TOGGLE_SNAP_TO_NEXT_COMMAND },
-            { "system-break", TOGGLE_SYSTEM_BREAK_COMMAND },
-            { "page-break", TOGGLE_PAGE_BREAK_COMMAND },
-            { "section-break", TOGGLE_SECTION_BREAK_COMMAND },
-            { "apply-system-lock", APPLY_SYSTEM_LOCK_COMMAND },
-            { "toggle-system-lock", TOGGLE_SYSTEM_LOCK_COMMAND },
-            { "apply-page-lock", APPLY_PAGE_LOCK_COMMAND },
-            { "toggle-page-lock", TOGGLE_PAGE_LOCK_COMMAND },
-            { "toggle-score-lock", TOGGLE_SCORE_LOCK_COMMAND },
-            { "make-into-system", MAKE_INTO_SYSTEM_COMMAND },
-            { "make-into-page", MAKE_INTO_PAGE_COMMAND },
-            { "move-measure-to-prev-system", MOVE_MEASURE_TO_PREV_SYSTEM_COMMAND },
-            { "move-measure-to-next-system", MOVE_MEASURE_TO_NEXT_SYSTEM_COMMAND },
-            { "move-system-to-prev-page", MOVE_SYSTEM_TO_PREV_PAGE_COMMAND },
-            { "move-system-to-next-page", MOVE_SYSTEM_TO_NEXT_PAGE_COMMAND },
-            { "split-measure", SPLIT_MEASURE_COMMAND },
-            { "join-measures", JOIN_MEASURES_COMMAND },
-            { "insert-measure", INSERT_MEASURE_COMMAND },
-            { "append-measure", APPEND_MEASURE_COMMAND },
-            { "insert-hbox", INSERT_HBOX_COMMAND },
-            { "insert-vbox", INSERT_VBOX_COMMAND },
-            { "insert-textframe", INSERT_TEXTFRAME_COMMAND },
-            { "insert-fretframe", INSERT_FRETFRAME_COMMAND },
-            { "append-hbox", APPEND_HBOX_COMMAND },
-            { "append-vbox", APPEND_VBOX_COMMAND },
-            { "append-textframe", APPEND_TEXTFRAME_COMMAND },
-            { "append-fretframe", APPEND_FRETFRAME_COMMAND },
-            { "page-settings", OPEN_PAGE_SETTINGS_COMMAND },
-            { "staff-properties", OPEN_STAFF_PROPERTIES_COMMAND },
-            { "edit-strings", OPEN_EDIT_STRINGS_COMMAND },
-            { "measures-per-system", OPEN_BREAKS_COMMAND },
-            { "staff-text-properties", OPEN_STAFF_TEXT_PROPERTIES_COMMAND },
-            { "system-text-properties", OPEN_SYSTEM_TEXT_PROPERTIES_COMMAND },
-            { "measure-properties", OPEN_MEASURE_PROPERTIES_COMMAND },
-            { "transpose", OPEN_TRANSPOSE_COMMAND },
-            { "parts", OPEN_PARTS_COMMAND },
-            { "config-raster", OPEN_EDITGRIDSIZE_COMMAND },
-            { "realize-chord-symbols", OPEN_REALIZECHORDSYMBOLS_COMMAND },
-            { "load-style", LOAD_STYLE_COMMAND },
-            { "save-style", SAVE_STYLE_COMMAND },
-            { "add-fretboard-diagram", ADD_FRETBOARD_DIAGRAM_COMMAND },
-            { "add-ottava-8va", ADD_OTTAVA_8VA_COMMAND },
-            { "add-ottava-8vb", ADD_OTTAVA_8VB_COMMAND },
-            { "add-dynamic", ADD_DYNAMIC_COMMAND },
-            { "add-hairpin", ADD_HAIRPIN_COMMAND },
-            { "add-hairpin-reverse", ADD_HAIRPIN_REVERSE_COMMAND },
-            { "add-noteline", ADD_NOTELINE_COMMAND },
-            { "add-image", ADD_IMAGE_COMMAND },
-            { "stretch-decrease", STRETCH_DECREASE_COMMAND },
-            { "stretch-increase", STRETCH_INCREASE_COMMAND },
-            { "stretch-reset", STRETCH_RESET_COMMAND },
-            { "title-text", ADD_TITLE_TEXT_COMMAND },
-            { "subtitle-text", ADD_SUBTITLE_TEXT_COMMAND },
-            { "composer-text", ADD_COMPOSER_TEXT_COMMAND },
-            { "poet-text", ADD_LYRICIST_TEXT_COMMAND },
-            { "part-text", ADD_PART_TEXT_COMMAND },
-            { "frame-text", ADD_FRAME_TEXT_COMMAND },
-            { "system-text", ADD_SYSTEM_TEXT_COMMAND },
-            { "staff-text", ADD_STAFF_TEXT_COMMAND },
-            { "expression-text", ADD_EXPRESSION_TEXT_COMMAND },
-            { "rehearsalmark-text", ADD_REHEARSALMARK_TEXT_COMMAND },
-            { "instrument-change-text", ADD_INSTRUMENT_CHANGE_TEXT_COMMAND },
-            { "fingering-text", ADD_FINGERING_TEXT_COMMAND },
-            { "sticking-text", ADD_STICKING_TEXT_COMMAND },
-            { "chord-text", ADD_CHORD_TEXT_COMMAND },
-            { "roman-numeral-text", ADD_ROMAN_NUMERAL_TEXT_COMMAND },
-            { "nashville-number-text", ADD_NASHVILLE_NUMBER_TEXT_COMMAND },
-            { "lyrics", ADD_LYRICS_COMMAND },
-            { "tempo", ADD_TEMPO_COMMAND },
-            { "figured-bass", ADD_FIGURED_BASS_COMMAND },
-            { "reset-text-style-overrides", RESET_TEXT_STYLE_OVERRIDES_COMMAND },
-            { "reset-beammode", RESET_BEAMS_COMMAND },
-            { "reset", RESET_SHAPES_AND_POSITIONS_COMMAND },
-            { "reset-to-default-layout", RESET_TO_DEFAULT_LAYOUT_COMMAND },
-            { "show-invisible", SHOW_INVISIBLE_COMMAND },
-            { "show-unprintable", SHOW_UNPRINTABLE_COMMAND },
-            { "show-frames", SHOW_FRAMES_COMMAND },
-            { "show-pageborders", SHOW_PAGEBORDERS_COMMAND },
-            { "show-soundflags", SHOW_SOUNDFLAGS_COMMAND },
-            { "show-irregular", SHOW_IRREGULAR_COMMAND },
-            { "explode", STAFF_EXPLODE_COMMAND },
-            { "implode", STAFF_IMPLODE_COMMAND },
-            { "concert-pitch", TOGGLE_CONCERT_PITCH_COMMAND },
-            { "acciaccatura", ADD_ACCIACCATURA_COMMAND },
-            { "appoggiatura", ADD_APPOGGIATURA_COMMAND },
-            { "grace4", ADD_GRACE4_COMMAND },
-            { "grace16", ADD_GRACE16_COMMAND },
-            { "grace32", ADD_GRACE32_COMMAND },
-            { "grace8after", ADD_GRACE8_AFTER_COMMAND },
-            { "grace16after", ADD_GRACE16_AFTER_COMMAND },
-            { "grace32after", ADD_GRACE32_AFTER_COMMAND },
-            { "beam-auto", ADD_BEAM_AUTO_COMMAND },
-            { "beam-none", ADD_BEAM_NONE_COMMAND },
-            { "beam-break-left", ADD_BEAM_BEGIN_COMMAND },
-            { "beam-break-inner-8th", ADD_BEAM_BEGIN16_COMMAND },
-            { "beam-break-inner-16th", ADD_BEAM_BEGIN32_COMMAND },
-            { "beam-join", ADD_BEAM_MID_COMMAND },
-            { "beam-selected-range", ADD_BEAM_SELECTED_RANGE_COMMAND },
-            { "add-brackets", ADD_BRACKETS_COMMAND },
-            { "add-parentheses", ADD_PARENTHESES_COMMAND },
-            { "add-braces", ADD_BRACES_COMMAND },
-            { "add-turn", ADD_TURN_COMMAND },
-            { "add-turn-inverted", ADD_TURN_INVERTED_COMMAND },
-            { "add-turn-slash", ADD_TURN_SLASH_COMMAND },
-            { "add-turn-up", ADD_TURN_UP_COMMAND },
-            { "add-turn-inverted-up", ADD_TURN_INVERTED_UP_COMMAND },
-            { "add-trill", ADD_TRILL_COMMAND },
-            { "add-short-trill", ADD_SHORT_TRILL_COMMAND },
-            { "add-mordent", ADD_MORDENT_COMMAND },
-            { "add-haydn", ADD_HAYDN_COMMAND },
-            { "add-tremblement", ADD_TREMBLEMENT_COMMAND },
-            { "add-prall-mordent", ADD_PRALL_MORDENT_COMMAND },
-            { "add-shake", ADD_SHAKE_COMMAND },
-            { "add-shake-muffat", ADD_SHAKE_MUFFAT_COMMAND },
-            { "add-tremblement-couperin", ADD_TREMBLEMENT_COUPERIN_COMMAND },
-            { "select-next-chord", ADD_TO_SELECTION_NEXT_CHORD_COMMAND },
-            { "select-prev-chord", ADD_TO_SELECTION_PREV_CHORD_COMMAND },
-            { "select-next-measure", ADD_TO_SELECTION_NEXT_MEASURE_COMMAND },
-            { "select-prev-measure", ADD_TO_SELECTION_PREV_MEASURE_COMMAND },
-            { "select-above-staff", ADD_TO_SELECTION_ABOVE_STAFF_COMMAND },
-            { "select-below-staff", ADD_TO_SELECTION_BELOW_STAFF_COMMAND },
-            { "select-begin-line", ADD_TO_SELECTION_BEGIN_SYSTEM_COMMAND },
-            { "select-end-line", ADD_TO_SELECTION_END_SYSTEM_COMMAND },
-            { "select-begin-score", ADD_TO_SELECTION_BEGIN_SCORE_COMMAND },
-            { "select-end-score", ADD_TO_SELECTION_END_SCORE_COMMAND },
-            { "extend-to-next-note", EXTEND_TO_NEXT_NOTE_COMMAND },
-            { "time-delete", REMOVE_SELECTED_RANGE_COMMAND },
-            { "del-empty-measures", REMOVE_EMPTY_TRAILING_MEASURES_COMMAND },
-            { "slash-fill", SLASH_FILL_COMMAND },
-            { "slash-rhythm", SLASH_RHYTHM_COMMAND },
-            { "pitch-spell", PITCH_SPELL_COMMAND },
-            { "pitch-spell-sharps", PITCH_SPELL_SHARPS_COMMAND },
-            { "pitch-spell-flats", PITCH_SPELL_FLATS_COMMAND },
-            { "enh-both", ENHARMONIC_SPELL_BOTH_COMMAND },
-            { "enh-current", ENHARMONIC_SPELL_CURRENT_COMMAND },
-            { "reset-groupings", REGROUP_RHYTHMS_COMMAND },
-            { "resequence-rehearsal-marks", RESEQUENCE_REHEARSAL_MARKS_COMMAND },
-            { "unroll-repeats", UNROLL_REPEATS_COMMAND },
-            { "copy-lyrics-to-clipboard", COPY_LYRICS_COMMAND },
-            { "repeat-selection", REPEAT_SELECTION_COMMAND },
-            { "add-up-bow", ADD_UP_BOW_COMMAND },
-            { "add-down-bow", ADD_DOWN_BOW_COMMAND },
-            { "transpose-up", TRANSPOSE_UP_COMMAND },
-            { "transpose-down", TRANSPOSE_DOWN_COMMAND },
-            { "toggle-insert-mode", TOGGLE_INSERT_MODE_COMMAND },
-            { "get-location", GET_LOCATION_COMMAND },
-            { "toggle-mmrest", TOGGLE_MMREST_COMMAND },
-            { "toggle-hide-empty", TOGGLE_HIDE_EMPTY_COMMAND },
-            { "mirror-note", MIRROR_NOTEHEAD_COMMAND },
-            { "set-visible", SET_VISIBLE_COMMAND },
-            { "unset-visible", UNSET_VISIBLE_COMMAND },
-            { "toggle-autoplace", TOGGLE_AUTOPLACE_COMMAND },
-            { "autoplace-enabled", AUTOPLACE_ENABLED_COMMAND },
-            { "full-measure-rest", ADD_FULL_MEASURE_REST_COMMAND },
-            { "interval1", ADD_INTERVAL_PLUS_1_COMMAND },
-            { "interval2", ADD_INTERVAL_PLUS_2_COMMAND },
-            { "interval3", ADD_INTERVAL_PLUS_3_COMMAND },
-            { "interval4", ADD_INTERVAL_PLUS_4_COMMAND },
-            { "interval5", ADD_INTERVAL_PLUS_5_COMMAND },
-            { "interval6", ADD_INTERVAL_PLUS_6_COMMAND },
-            { "interval7", ADD_INTERVAL_PLUS_7_COMMAND },
-            { "interval8", ADD_INTERVAL_PLUS_8_COMMAND },
-            { "interval9", ADD_INTERVAL_PLUS_9_COMMAND },
-            { "interval10", ADD_INTERVAL_PLUS_10_COMMAND },
-            { "interval-2", ADD_INTERVAL_MINUS_2_COMMAND },
-            { "interval-3", ADD_INTERVAL_MINUS_3_COMMAND },
-            { "interval-4", ADD_INTERVAL_MINUS_4_COMMAND },
-            { "interval-5", ADD_INTERVAL_MINUS_5_COMMAND },
-            { "interval-6", ADD_INTERVAL_MINUS_6_COMMAND },
-            { "interval-7", ADD_INTERVAL_MINUS_7_COMMAND },
-            { "interval-8", ADD_INTERVAL_MINUS_8_COMMAND },
-            { "interval-9", ADD_INTERVAL_MINUS_9_COMMAND },
-            { "interval-10", ADD_INTERVAL_MINUS_10_COMMAND },
-            { "voice-assignment-all-in-instrument", VOICE_ASSIGNMENT_ALL_IN_INSTR_COMMAND },
-            { "voice-assignment-all-in-staff", VOICE_ASSIGNMENT_ALL_IN_STAFF_COMMAND },
-            { "pad-note-1-TAB", SET_DURATION_WHOLE_TAB_COMMAND },
-            { "pad-note-2-TAB", SET_DURATION_HALF_TAB_COMMAND },
-            { "pad-note-4-TAB", SET_DURATION_QUARTER_TAB_COMMAND },
-            { "pad-note-8-TAB", SET_DURATION_EIGHTH_TAB_COMMAND },
-            { "pad-note-16-TAB", SET_DURATION_16TH_TAB_COMMAND },
-            { "pad-note-32-TAB", SET_DURATION_32ND_TAB_COMMAND },
-            { "pad-note-64-TAB", SET_DURATION_64TH_TAB_COMMAND },
-            { "pad-note-128-TAB", SET_DURATION_128TH_TAB_COMMAND },
-            { "pad-note-256-TAB", SET_DURATION_256TH_TAB_COMMAND },
-            { "pad-note-512-TAB", SET_DURATION_512TH_TAB_COMMAND },
-            { "pad-note-1024-TAB", SET_DURATION_1024TH_TAB_COMMAND },
-            { "rest-TAB", ENTER_REST_TAB_COMMAND },
-            { "fret-0", ENTER_FRET_0_COMMAND },
-            { "fret-1", ENTER_FRET_1_COMMAND },
-            { "fret-2", ENTER_FRET_2_COMMAND },
-            { "fret-3", ENTER_FRET_3_COMMAND },
-            { "fret-4", ENTER_FRET_4_COMMAND },
-            { "fret-5", ENTER_FRET_5_COMMAND },
-            { "fret-6", ENTER_FRET_6_COMMAND },
-            { "fret-7", ENTER_FRET_7_COMMAND },
-            { "fret-8", ENTER_FRET_8_COMMAND },
-            { "fret-9", ENTER_FRET_9_COMMAND },
-            { "fret-10", ENTER_FRET_10_COMMAND },
-            { "fret-11", ENTER_FRET_11_COMMAND },
-            { "fret-12", ENTER_FRET_12_COMMAND },
-            { "fret-13", ENTER_FRET_13_COMMAND },
-            { "fret-14", ENTER_FRET_14_COMMAND },
-            { "standard-bend", ADD_STANDARD_BEND_COMMAND },
-            { "pre-bend", ADD_PRE_BEND_COMMAND },
-            { "grace-note-bend", ADD_GRACE_NOTE_BEND_COMMAND },
-            { "slight-bend", ADD_SLIGHT_BEND_COMMAND },
-            { "dive", ADD_DIVE_COMMAND },
-            { "pre-dive", ADD_PRE_DIVE_COMMAND },
-            { "dip", ADD_DIP_COMMAND },
-            { "scoop", ADD_SCOOP_COMMAND },
-            { "hammer-on-pull-off", ADD_HAMMER_ON_PULL_OFF_COMMAND },
-            { "toggle-automation", TOGGLE_AUTOMATION_COMMAND },
-            { "string-up", GOTO_STRING_ABOVE_COMMAND },
-            { "string-down", GOTO_STRING_BELOW_COMMAND },
-            { "move-up", MOVE_UP_COMMAND },
-            { "move-down", MOVE_DOWN_COMMAND },
-            { "move-left", SWAP_LEFT_COMMAND },
-            { "move-right", SWAP_RIGHT_COMMAND },
-        };
-
-        static const std::vector<ActionToCommandWithParams> actionToCommandWithParams = {
-            { "custom-tuplet", ADD_TUPLET_COMMAND, tupletOptions },
-            { "insert-measures", INSERT_MEASURES_COMMAND, make_conv({ { "count", param<int> } }) },
-            { "insert-measures-after-selection", INSERT_MEASURES_AFTER_SELECTION_COMMAND, make_conv({ { "count", param<int> } }) },
-            { "insert-measures-at-start-of-score", INSERT_MEASURES_AT_START_OF_SCORE_COMMAND, make_conv({ { "count", param<int> } }) },
-            { "append-measures", APPEND_MEASURES_COMMAND, make_conv({ { "count", param<int> } }) },
-            { "edit-style", OPEN_EDIT_STYLE_COMMAND, make_conv({ { "page_code", param<std::string> },
-                                                                   { "sub_page_code", param<std::string> } }) },
-        };
-
-        auto ad = dispatcher();
-        auto d = commandDispatcher();
-        for (const auto& [actionCode, command] : actionToCommand) {
-            ad->reg(this, actionCode, [d, command]() { return d->dispatch(command); });
-        }
-
-        for (const auto& atc: actionToCommandWithParams) {
-            ad->reg(this, atc.actionCode, [d, atc](const ActionData& args) { return d->dispatch(atc.convertor(atc.command, args)); });
-        }
-    }
+INotationViewController* NotationActionController::viewController() const
+{
+    return m_viewController;
 }
 
 bool NotationActionController::canReceiveAction(const ActionCode& code) const
@@ -1378,35 +1366,46 @@ void NotationActionController::toggleNoteInputInsert()
     }
 }
 
-void NotationActionController::handleNoteAction(NoteName note, NoteAddingMode addingMode)
-{
-    NoteInputParams params;
-    const bool addFlag = addingMode == NoteAddingMode::CurrentChord;
-    bool ok = mu::engraving::NoteInput::resolveNoteInputParams(currentNotationScore(), static_cast<int>(note), addFlag, params);
-    if (!ok) {
-        LOGE() << "Could not resolve note input params, note: " << (int)note << ", addFlag: " << addFlag;
-        return;
-    }
-
-    handleNoteAction(ActionData::make_arg2<NoteInputParams, NoteAddingMode>(params, addingMode));
-}
-
-void NotationActionController::handleNoteAction(const muse::actions::ActionData& args)
-{
-    handleNoteAction(args.arg<NoteInputParams>(0), args.arg<NoteAddingMode>(1));
-}
-
-void NotationActionController::handleNoteAction(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::addNote(const muse::rcommand::CommandQuery& query)
 {
     TRACEFUNC;
 
     NoteName note = str_conv(query.param("note").toString(), NoteName::C);
     NoteAddingMode mode = str_conv(query.param("mode").toString(), NoteAddingMode::CurrentChord);
 
-    handleNoteAction(note, mode);
+    addNote(note, mode);
+    return muse::make_ok();
 }
 
-void NotationActionController::handleNoteAction(const NoteInputParams& params, const NoteAddingMode& addingMode)
+void NotationActionController::addNote(NoteName note, NoteAddingMode mode)
+{
+    NoteInputParams params;
+    const bool addFlag = mode == NoteAddingMode::CurrentChord;
+    bool ok = mu::engraving::NoteInput::resolveNoteInputParams(currentNotationScore(), static_cast<int>(note), addFlag, params);
+    if (!ok) {
+        LOGE() << "Could not resolve note input params, note: " << (int)note << ", addFlag: " << addFlag;
+        return;
+    }
+
+    doAddNote(params, mode);
+}
+
+muse::Ret NotationActionController::addDrumNote(const muse::rcommand::CommandQuery& query)
+{
+    TRACEFUNC;
+
+    int pitch = query.param("pitch").toInt();
+    NoteAddingMode mode = str_conv(query.param("mode").toString(), NoteAddingMode::CurrentChord);
+
+    NoteInputParams params;
+    params.drumPitch = pitch;
+
+    doAddNote(params, mode);
+
+    return muse::make_ok();
+}
+
+void NotationActionController::doAddNote(const NoteInputParams& params, const NoteAddingMode& addingMode)
 {
     TRACEFUNC;
 
@@ -1820,17 +1819,17 @@ bool NotationActionController::selectionHasSlur() const
     return hasSlur;
 }
 
-void NotationActionController::putNote(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::putNote(const muse::rcommand::CommandQuery& query)
 {
     TRACEFUNC;
 
     INotationNoteInputPtr noteInput = currentNotationNoteInput();
     if (!noteInput) {
-        return;
+        return muse::make_ret(Ret::Code::NotSupported);
     }
 
     IF_ASSERT_FAILED(query.contains("pos_x") && query.contains("pos_y")) {
-        return;
+        return muse::make_ret(Ret::Code::BadArgs);
     }
 
     float posX = query.param("pos_x").toFloat();
@@ -1844,19 +1843,21 @@ void NotationActionController::putNote(const muse::rcommand::CommandQuery& query
     if (ret) {
         seekAndPlaySelectedElement();
     }
+
+    return muse::make_ok();
 }
 
-void NotationActionController::removeNote(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::removeNote(const muse::rcommand::CommandQuery& query)
 {
     TRACEFUNC;
 
     INotationNoteInputPtr noteInput = currentNotationNoteInput();
     if (!noteInput) {
-        return;
+        return muse::make_ret(Ret::Code::NotSupported);
     }
 
     IF_ASSERT_FAILED(query.contains("pos_x") && query.contains("pos_y")) {
-        return;
+        return muse::make_ret(Ret::Code::BadArgs);
     }
 
     float posX = query.param("pos_x").toFloat();
@@ -1865,6 +1866,8 @@ void NotationActionController::removeNote(const muse::rcommand::CommandQuery& qu
     PointF pos = PointF(posX, posY);
     noteInput->removeNote(pos);
     seekSelectedElement();
+
+    return muse::make_ok();
 }
 
 void NotationActionController::toggleAccidental(AccidentalType type)
@@ -1926,7 +1929,7 @@ void NotationActionController::toggleArticulation(SymbolId articulationSymbolId)
     }
 }
 
-void NotationActionController::putTuplet(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::putTuplet(const muse::rcommand::CommandQuery& query)
 {
     TupletOptions options;
     options.ratio = engraving::Fraction::fromString(muse::String::fromStdString(query.param("ratio").toString()));
@@ -1935,6 +1938,7 @@ void NotationActionController::putTuplet(const muse::rcommand::CommandQuery& que
     options.autoBaseLen = query.param("auto-baselen", Val(false)).toBool();
 
     putTuplet(options);
+    return muse::make_ok();
 }
 
 void NotationActionController::putTuplet(const TupletOptions& options)
@@ -2039,17 +2043,6 @@ ScoreConfig NotationActionController::scoreConfig() const
 muse::async::Channel<ScoreConfigType> NotationActionController::scoreConfigChanged() const
 {
     return m_scoreConfigChanged;
-}
-
-void NotationActionController::select(SelectionTarget target)
-{
-    auto interaction = currentNotationInteraction();
-    if (!interaction) {
-        return;
-    }
-
-    interaction->select(target);
-    seekSelectedElement();
 }
 
 muse::Ret NotationActionController::moveWithRet(MoveDirection direction, bool quickly)
@@ -2499,31 +2492,34 @@ void NotationActionController::openSelectionMoreOptions()
     }
 }
 
-void NotationActionController::startEditSelectedElement(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::startEditSelectedElement(const muse::rcommand::CommandQuery& query)
 {
     auto interaction = currentNotationInteraction();
     if (!interaction) {
-        return;
+        return muse::make_ret(Ret::Code::NotSupported);
     }
 
     auto selection = interaction->selection();
     if (!selection) {
-        return;
+        return muse::make_ret(Ret::Code::BadArgs);
     }
 
     mu::engraving::EngravingItem* element = selection->element();
     if (!element) {
-        return;
+        return muse::make_ret(Ret::Code::BadArgs);
     }
 
     if (element->isInstrumentName()) {
         openStaffProperties();
-        return;
+        return muse::make_ok();
     }
 
     if (elementHasPopup(element) && !interaction->textEditingAllowed(element)) {
-        dispatcher()->dispatch("notation-popup-menu", ActionData::make_arg1<EngravingItem*>(element));
-        return;
+        IF_ASSERT_FAILED(m_viewController) {
+            return muse::make_ret(Ret::Code::NotSupported);
+        }
+        m_viewController->togglePopupForItemIfSupports(element);
+        return muse::make_ok();
     }
 
     if (element->isText()) {
@@ -2533,7 +2529,7 @@ void NotationActionController::startEditSelectedElement(const muse::rcommand::Co
             muse::rcommand::CommandQuery q(OPEN_EDIT_STYLE_COMMAND);
             q.addParam("page_code", Val("header-and-footer"));
             openEditStyleDialog(q);
-            return;
+            return muse::make_ok();
         }
     }
 
@@ -2545,18 +2541,20 @@ void NotationActionController::startEditSelectedElement(const muse::rcommand::Co
     } else {
         interaction->startEditElement(element);
     }
+
+    return muse::make_ok();
 }
 
-void NotationActionController::startEditSelectedText(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::startEditSelectedText(const muse::rcommand::CommandQuery& query)
 {
     auto interaction = currentNotationInteraction();
     if (!interaction) {
-        return;
+        return muse::make_ret(Ret::Code::NotSupported);
     }
 
     auto selection = interaction->selection();
     if (!selection) {
-        return;
+        return muse::make_ret(Ret::Code::BadArgs);
     }
 
     mu::engraving::EngravingItem* element = selection->element();
@@ -2567,25 +2565,11 @@ void NotationActionController::startEditSelectedText(const muse::rcommand::Comma
         PointF cursorPos = PointF(posX, posY);
         interaction->startEditText(element, cursorPos);
     }
+
+    return muse::make_ok();
 }
 
-void NotationActionController::addMeasures(const ActionData& actionData, AddBoxesTarget target)
-{
-    TRACEFUNC;
-
-    if (!actionData.empty()) {
-        int count = actionData.arg<int>();
-        addBoxes(BoxType::Measure, count, target);
-    } else {
-        interactive()->open("musescore://notation/selectmeasurescount")
-        .onResolve(this, [this, target](const Val& v) {
-            int count = v.toInt();
-            addBoxes(BoxType::Measure, count, target);
-        });
-    }
-}
-
-void NotationActionController::addMeasures(const muse::rcommand::CommandQuery& query, AddBoxesTarget target)
+muse::Ret NotationActionController::addMeasures(const muse::rcommand::CommandQuery& query, AddBoxesTarget target)
 {
     if (query.contains("count")) {
         int count = query.param("count").toInt();
@@ -2597,6 +2581,8 @@ void NotationActionController::addMeasures(const muse::rcommand::CommandQuery& q
             addBoxes(BoxType::Measure, count, target);
         });
     }
+
+    return muse::make_ok();
 }
 
 void NotationActionController::addBoxes(BoxType boxType, int count, AddBoxesTarget target)
@@ -2704,7 +2690,7 @@ void NotationActionController::resetBeamMode()
     }
 }
 
-void NotationActionController::openEditStyleDialog(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::openEditStyleDialog(const muse::rcommand::CommandQuery& query)
 {
     UriQuery uri("musescore://notation/style");
 
@@ -2717,6 +2703,7 @@ void NotationActionController::openEditStyleDialog(const muse::rcommand::Command
     }
 
     interactive()->open(uri);
+    return muse::make_ok();
 }
 
 void NotationActionController::openPageSettingsDialog()
@@ -2800,11 +2787,6 @@ void NotationActionController::saveStyle()
                                  muse::trc("notation", "An error occurred."));
         }
     }
-}
-
-bool NotationActionController::measureNavigationAvailable() const
-{
-    return isNotEditingOrHasPopup() || textNavigationAvailable();
 }
 
 bool NotationActionController::isTextEditing() const
@@ -2946,7 +2928,7 @@ void NotationActionController::navigateToTextElement(MoveDirection direction, bo
     }
 }
 
-void NotationActionController::navigateToTextElementByFraction(const Fraction& fraction)
+void NotationActionController::navigateToTextItemByFraction(const Fraction& fraction)
 {
     const mu::engraving::EngravingItem* element = selectedElement();
     if (!element) {
@@ -3000,22 +2982,6 @@ bool NotationActionController::isEditingText() const
     }
 
     return interaction->isTextEditingStarted();
-}
-
-bool NotationActionController::isEditingLyrics() const
-{
-    auto interaction = currentNotationInteraction();
-    if (!interaction) {
-        return false;
-    }
-
-    return interaction->isTextEditingStarted() && interaction->selection()->element()
-           && interaction->selection()->element()->isLyrics();
-}
-
-bool NotationActionController::isNotNoteInputMode() const
-{
-    return currentNotationInteraction() && !isNoteInputMode();
 }
 
 void NotationActionController::openTupletOtherDialog()
@@ -3232,26 +3198,6 @@ bool NotationActionController::isNotEditingElement() const
     return !isEditingElement();
 }
 
-bool NotationActionController::isNotEditingOrHasPopup() const
-{
-    const EngravingItem* element = selectedElement();
-
-    if (!element) {
-        return isNotEditingElement();
-    }
-
-    return elementHasPopup(element) || isNotEditingElement();
-}
-
-bool NotationActionController::isToggleVisibleAllowed() const
-{
-    auto interaction = currentNotationInteraction();
-    if (interaction) {
-        return !(interaction->isTextEditingStarted());
-    }
-    return false;
-}
-
 void NotationActionController::checkForScoreCorruptions()
 {
     project::INotationProjectPtr project = globalContext()->currentProject();
@@ -3290,40 +3236,20 @@ void NotationActionController::toggleAutomation()
     masterNotation->automation()->setAutomationModeEnabled(!isEnabled);
 }
 
-void NotationActionController::registerAction(const ActionCode& code,
-                                              std::function<void()> handler, bool (NotationActionController::* isEnabled)() const)
+muse::Ret NotationActionController::selectAutomationType(const muse::rcommand::CommandQuery& query)
 {
-    m_isEnabledMap[code] = std::bind(isEnabled, this);
-    dispatcher()->reg(this, code, handler);
-}
+    const std::string type = query.param("type").toString();
 
-void NotationActionController::registerAction(const ActionCode& code,
-                                              std::function<void(const ActionData&)> handler,
-                                              bool (NotationActionController::* isEnabled)() const)
-{
-    m_isEnabledMap[code] = std::bind(isEnabled, this);
-    dispatcher()->reg(this, code, handler);
-}
+    mu::engraving::AutomationType automationType = mu::engraving::AutomationType::Dynamics;
+    if (type == "volume") {
+        automationType = mu::engraving::AutomationType::Volume;
+    } else if (type == "pan") {
+        automationType = mu::engraving::AutomationType::Pan;
+    }
 
-void NotationActionController::registerAction(const ActionCode& code,
-                                              void (NotationActionController::* handler)(const ActionData& data),
-                                              bool (NotationActionController::* isEnabled)() const)
-{
-    m_isEnabledMap[code] = std::bind(isEnabled, this);
-    dispatcher()->reg(this, code, this, handler);
-}
+    configuration()->setCurrentAutomationType(automationType);
 
-void NotationActionController::registerAction(const ActionCode& code,
-                                              void (NotationActionController::* handler)(),
-                                              bool (NotationActionController::* isEnabled)() const)
-{
-    m_isEnabledMap[code] = std::bind(isEnabled, this);
-    dispatcher()->reg(this, code, this, handler);
-}
-
-void NotationActionController::registerNoteInputAction(const ActionCode& code, NoteInputMethod inputMethod)
-{
-    registerAction(code, [this, inputMethod]() { toggleNoteInput(inputMethod); }, &Controller::toggleNoteInputAllowed);
+    return muse::make_ok();
 }
 
 bool NotationActionController::isNoteInputActionAllowed() const
@@ -3335,152 +3261,34 @@ bool NotationActionController::isNoteInputActionAllowed() const
     return !isTablatureStaff();
 }
 
-void NotationActionController::select(const muse::rcommand::CommandQuery& query)
+muse::Ret NotationActionController::select(const muse::rcommand::CommandQuery& query)
 {
     LOGDA() << query.toString();
 
     SelectionTarget target = str_conv(query.param("target").toString(), SelectionTarget::Undefined);
     if (target == SelectionTarget::Undefined) {
+        return muse::make_ret(Ret::Code::BadArgs);
+    }
+
+    PlayMode playMode = str_conv(query.param("play-mode").toString(), PlayMode::NoPlay);
+
+    select(target, playMode);
+    return muse::make_ok();
+}
+
+void NotationActionController::select(SelectionTarget target, PlayMode playMode)
+{
+    auto interaction = currentNotationInteraction();
+    if (!interaction) {
         return;
     }
 
-    select(target);
+    interaction->select(target);
+    seekSelectedElement();
 
-    PlayMode playMode = str_conv(query.param("play-mode").toString(), PlayMode::NoPlay);
     if (playMode != PlayMode::NoPlay) {
-        seekSelectedElement();
         playSelectedElement(playMode == PlayMode::PlayChord);
     }
-}
-
-void NotationActionController::registerSelectionCommand(const muse::rcommand::Command& command,
-                                                        SelectionTarget target, PlayMode playMode)
-{
-    registerCommand(command, [this, target, playMode]() {
-        select(target);
-
-        if (playMode != PlayMode::NoPlay) {
-            seekSelectedElement();
-            playSelectedElement(playMode == PlayMode::PlayChord);
-        }
-    });
-}
-
-void NotationActionController::registerExpandSelectionAction(const ActionCode& code, ExpandSelectionMode mode)
-{
-    registerAction(code, &Interaction::expandSelection, mode, PlayMode::NoPlay, &Controller::isNotNoteInputMode);
-    m_isAllowedDuringPlayback.insert(code);
-}
-
-void NotationActionController::registerAction(const ActionCode& code,
-                                              void (INotationInteraction::* handler)(), PlayMode playMode,
-                                              bool (NotationActionController::* enabler)() const)
-{
-    registerAction(code, [this, handler, playMode]()
-    {
-        INotationPtr notation = currentNotation();
-        if (notation) {
-            (notation->interaction().get()->*handler)();
-
-            seekSelectedElement();
-
-            if (playMode != PlayMode::NoPlay) {
-                playSelectedElement(playMode == PlayMode::PlayChord);
-            }
-        }
-    }, enabler);
-}
-
-void NotationActionController::registerAction(const ActionCode& code,
-                                              void (NotationActionController::* handler)(MoveDirection,
-                                                                                         bool), MoveDirection direction, bool quickly,
-                                              bool (NotationActionController::* enabler)() const)
-{
-    registerAction(code, [this, handler, direction, quickly]() { (this->*handler)(direction, quickly); }, enabler);
-}
-
-void NotationActionController::registerAction(const muse::actions::ActionCode& code,
-                                              void (NotationActionController::* handler)(), Ret (INotationInteraction::*enabler)() const)
-{
-    auto _enabler = [this, enabler]() {
-        INotationPtr notation = currentNotation();
-        if (notation) {
-            return ((*notation->interaction()).*enabler)().success();
-        }
-
-        return false;
-    };
-
-    m_isEnabledMap[code] = _enabler;
-    dispatcher()->reg(this, code, this, handler);
-}
-
-void NotationActionController::registerAction(const muse::actions::ActionCode& code, std::function<void()> handler,
-                                              Ret (INotationInteraction::*enabler)() const)
-{
-    auto _enabler = [this, enabler]() {
-        INotationPtr notation = currentNotation();
-        if (notation) {
-            return ((*notation->interaction()).*enabler)().success();
-        }
-
-        return false;
-    };
-
-    m_isEnabledMap[code] = _enabler;
-    dispatcher()->reg(this, code, handler);
-}
-
-void NotationActionController::registerAction(const ActionCode& code,
-                                              void (INotationInteraction::* handler)(), bool (NotationActionController::* enabler)() const)
-{
-    registerAction(code, handler, PlayMode::NoPlay, enabler);
-}
-
-template<class P1>
-void NotationActionController::registerAction(const ActionCode& code, void (INotationInteraction::* handler)(P1),
-                                              P1 param1, PlayMode playMode, bool (NotationActionController::* enabler)() const)
-{
-    registerAction(code, [this, handler, param1, playMode]()
-    {
-        INotationPtr notation = currentNotation();
-        if (notation) {
-            (notation->interaction().get()->*handler)(param1);
-
-            seekSelectedElement();
-
-            if (playMode != PlayMode::NoPlay) {
-                playSelectedElement(playMode == PlayMode::PlayChord);
-            }
-        }
-    }, enabler);
-}
-
-template<class P1>
-void NotationActionController::registerAction(const ActionCode& code,
-                                              void (INotationInteraction::* handler)(
-                                                  P1), P1 param1, bool (NotationActionController::* enabler)() const)
-{
-    registerAction(code, handler, param1, PlayMode::NoPlay, enabler);
-}
-
-template<typename P1, typename P2, typename Q1, typename Q2>
-void NotationActionController::registerAction(const ActionCode& code, void (INotationInteraction::* handler)(P1, P2),
-                                              Q1 param1, Q2 param2, PlayMode playMode, bool (NotationActionController::* enabler)() const)
-{
-    registerAction(code, [this, handler, param1, param2, playMode]()
-    {
-        INotationPtr notation = currentNotation();
-        if (notation) {
-            (notation->interaction().get()->*handler)(param1, param2);
-
-            seekSelectedElement();
-
-            if (playMode != PlayMode::NoPlay) {
-                playSelectedElement(playMode == PlayMode::PlayChord);
-            }
-        }
-    }, enabler);
 }
 
 // COMMANDS
@@ -3508,16 +3316,16 @@ void NotationActionController::registerCommand(const muse::rcommand::Command& co
     });
 }
 
-void NotationActionController::registerCommand(const muse::rcommand::Command& command,
-                                               std::function<void(const muse::rcommand::CommandQuery&)> handler)
+void NotationActionController::registerQueryCommand(const muse::rcommand::Command& command,
+                                                    std::function<muse::Ret(const muse::rcommand::CommandQuery&)> handler)
 {
     commandDispatcher()->onRequest(this, command, [this, command, handler](const rcommand::Request& request) {
         if (!commandsState()->commandState(command).enabled) {
             return rcommand::make_response(request, muse::make_ret(Ret::Code::NotSupported));
         }
 
-        handler(request.query);
-        return rcommand::make_response(request, muse::make_ok());
+        muse::Ret ret = handler(request.query);
+        return rcommand::make_response(request, ret);
     });
 }
 
@@ -3544,17 +3352,16 @@ void NotationActionController::registerCommand(const muse::rcommand::Command& co
     });
 }
 
-void NotationActionController::registerCommand(const muse::rcommand::Command& command,
-                                               void (NotationActionController::* handler)(const muse::rcommand::CommandQuery&))
+void NotationActionController::registerQueryCommand(const muse::rcommand::Command& command,
+                                                    muse::Ret (NotationActionController::* handler)(const muse::rcommand::CommandQuery&))
 {
     commandDispatcher()->onRequest(this, command, [this, command, handler](const rcommand::Request& request) {
         if (!commandsState()->commandState(command).enabled) {
             return rcommand::make_response(request, muse::make_ret(Ret::Code::NotSupported));
         }
 
-        (this->*handler)(request.query);
-
-        return rcommand::make_response(request, muse::make_ok());
+        muse::Ret ret = (this->*handler)(request.query);
+        return rcommand::make_response(request, ret);
     });
 }
 
@@ -3605,24 +3412,6 @@ void NotationActionController::registerCommand(const muse::rcommand::Command& co
     }, enabler);
 }
 
-void NotationActionController::registerAliases(const std::map<muse::rcommand::Command, muse::rcommand::CommandQuery>& aliases,
-                                               void (NotationActionController::*handler)(const muse::rcommand::CommandQuery&))
-{
-    for (auto it = aliases.cbegin(); it != aliases.cend(); ++it) {
-        auto alias = it->first;
-        auto query = it->second;
-
-        commandDispatcher()->onRequest(this, alias, [this, query, handler]() {
-            if (!commandsState()->commandState(query.uri()).enabled) {
-                return muse::make_ret(Ret::Code::NotSupported);
-            }
-
-            (this->*handler)(query);
-            return muse::make_ok();
-        });
-    }
-}
-
 void NotationActionController::registerNoteInputCommand(const muse::rcommand::Command& command, NoteInputMethod method)
 {
     registerCommand(command, [this, method]() { toggleNoteInput(method); }, &NotationActionController::toggleNoteInputAllowed);
@@ -3634,6 +3423,67 @@ void NotationActionController::registerNoteCommand(const muse::rcommand::Command
 {
     registerCommand(command, [this, noteName, addingMode]()
     {
-        handleNoteAction(noteName, addingMode);
+        addNote(noteName, addingMode);
     });
+}
+
+void NotationActionController::registerNavigationByFractionCommand(const muse::rcommand::Command& command, const Fraction& fraction)
+{
+    registerCommand(command, [this, fraction]() {
+        navigateToTextItemByFraction(
+            fraction);
+    }, &NotationActionController::textNavigationByFractionAvailable);
+}
+
+void NotationActionController::registerViewCommand(const muse::rcommand::Command& command, void (INotationViewController::* handler)())
+{
+    commandDispatcher()->onRequest(this, command, [this, command, handler]() {
+        if (!commandsState()->commandState(command).enabled) {
+            return muse::make_ret(Ret::Code::NotSupported);
+        }
+
+        if (!m_viewController) {
+            LOGE() << "command: " << command.isValid() << " NotSupported, viewController is null";
+            return muse::make_ret(Ret::Code::NotSupported);
+        }
+
+        (m_viewController->*handler)();
+        return muse::make_ok();
+    });
+}
+
+template<typename P1>
+void NotationActionController::registerViewCommand(const muse::rcommand::Command& command,
+                                                   void (INotationViewController::* handler)(P1),
+                                                   P1 p1)
+{
+    commandDispatcher()->onRequest(this, command, [this, command, handler, p1]() {
+        if (!commandsState()->commandState(command).enabled) {
+            return muse::make_ret(Ret::Code::NotSupported);
+        }
+
+        if (!m_viewController) {
+            LOGE() << "command: " << command.isValid() << " NotSupported, viewController is null";
+            return muse::make_ret(Ret::Code::NotSupported);
+        }
+
+        (m_viewController->*handler)(p1);
+        return muse::make_ok();
+    });
+}
+
+muse::Ret NotationActionController::zoomToPercent(const muse::rcommand::CommandQuery& query)
+{
+    if (!query.contains("percent")) {
+        return muse::make_ret(Ret::Code::BadArgs);
+    }
+
+    if (!m_viewController) {
+        LOGE() << "command: " << ZOOM_TO_PERCENT_COMMAND.toString() << " NotSupported, viewController is null";
+        return muse::make_ret(Ret::Code::NotSupported);
+    }
+
+    int zoomPercentage = query.param("percent").toInt();
+    m_viewController->setZoom(zoomPercentage);
+    return muse::make_ok();
 }
