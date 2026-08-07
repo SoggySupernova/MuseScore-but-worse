@@ -55,6 +55,7 @@ vtest/Pictures
 .vs
 dependencies
 muse/
+muse_deps/
 
 # Downloaded files during build process
 VERSION
